@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lib/pq"
 	"twitch_room/internal/service"
+
+	"github.com/lib/pq"
 )
 
 type PostgresStore struct {

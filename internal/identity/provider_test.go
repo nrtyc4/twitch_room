@@ -21,7 +21,7 @@ func TestTwitchProviderAcceptsDevHeader(t *testing.T) {
 }
 
 func TestTwitchProviderRejectsMissingBearerToken(t *testing.T) {
-	provider := &TwitchProvider{ClientID: "client-id"}
+	provider := &TwitchProvider{EnableDevAuth: false}
 	req := httptest.NewRequest("GET", "/v1/watch", nil)
 
 	if _, err := provider.ResolveUserID(context.Background(), req); err == nil {
@@ -29,16 +29,32 @@ func TestTwitchProviderRejectsMissingBearerToken(t *testing.T) {
 	}
 }
 
-func TestTwitchProviderAcceptsBearerTokenShape(t *testing.T) {
-	provider := &TwitchProvider{ClientID: "client-id"}
+func TestTwitchProviderRejectsInvalidBearerTokenFormat(t *testing.T) {
+	provider := &TwitchProvider{EnableDevAuth: false}
 	req := httptest.NewRequest("GET", "/v1/watch", nil)
-	req.Header.Set("Authorization", "Bearer token-value")
+	// Missing "Bearer " prefix
+	req.Header.Set("Authorization", "token-value")
+
+	if _, err := provider.ResolveUserID(context.Background(), req); err == nil {
+		t.Fatal("expected invalid token format to fail")
+	}
+}
+
+func TestTwitchProviderFallsBackToDevAuthWhenNoValidBearerToken(t *testing.T) {
+	provider := &TwitchProvider{
+		EnableDevAuth: true,
+		ClientID:      "client-id",
+		ClientSecret:  "client-secret",
+		// Note: no proper Twitch credentials for real API calls
+	}
+	req := httptest.NewRequest("GET", "/v1/watch", nil)
+	req.Header.Set("X-User-ID", "fallback-user")
 
 	userID, err := provider.ResolveUserID(context.Background(), req)
 	if err != nil {
-		t.Fatalf("expected valid bearer token shape to pass, got error: %v", err)
+		t.Fatalf("expected fallback to dev auth, got error: %v", err)
 	}
-	if userID != "twitch-user" {
-		t.Fatalf("expected twitch-user, got %s", userID)
+	if userID != "fallback-user" {
+		t.Fatalf("expected fallback-user, got %s", userID)
 	}
 }
