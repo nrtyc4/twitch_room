@@ -22,78 +22,36 @@ This is the production-safe approach the service aims to use:
 - HTTPS is required in production.
 - Rate limiting, secret management, and expiry windows should be added before public deployment.
 
-## Local development
+## Production Deployment (Docker Compose)
 
-### Setup with environment file
+For deployment, we use `docker-compose` to manage the service and its dependencies (PostgreSQL).
 
-1. Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
+1.  **Setup Environment:**
+    Create a `.env` file in the root directory and populate it with your production secrets:
+    ```bash
+    cp .env.example .env
+    # Edit .env with actual credentials for all services
+    ```
 
-2. Edit `.env` and fill in your configuration:
-```bash
-# For Twitch OAuth (recommended)
-TWITCH_CLIENT_ID=your_client_id
-TWITCH_CLIENT_SECRET=your_client_secret
-TWITCH_REDIRECT_URI=http://localhost:8080/callback
+2.  **Run Services:**
+    Start both the database and the application service using Docker Compose:
+    ```bash
+    docker-compose up --build
+    ```
 
-# For database (optional, defaults to in-memory)
-DATABASE_DSN=postgres://user:password@localhost:5432/twitch_room
+3.  **Secrets Management in Production:**
+    *   **Database Credentials (`DATABASE_DSN`):** Use a dedicated secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault) and inject the credentials into the `postgres` service environment variables at runtime, rather than relying solely on `.env`.
+    *   **OAuth Secrets:** The `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, etc., must be injected via environment variables or a dedicated secrets store when running the container.
 
-# For development
-ALLOW_DEV_AUTH=true
-```
+## Configuration (Docker Compose)
 
-3. Run the service:
-```bash
-go run .
-```
-
-The `.env` file is automatically excluded from git, so your secrets will not be committed.
-
-### Secrets Management
-
-Sensitive configuration is managed through:
-
-1. **Environment Variables** — Primary source of secrets (production-safe)
-2. **.env Files** — Local development convenience (excluded from git)
-3. **Validation** — Service requires valid secrets before startup
-
-Secrets are never logged or exposed in error messages.
-
-**Production Deployment:**
-- Use environment variables or secure vaults (HashiCorp Vault, AWS Secrets Manager, etc.)
-- Never commit `.env` or other secret files
-- Rotate credentials regularly
-
-### Run the service
-
-```bash
-go run .
-```
-
-Then send requests like:
-
-```bash
-curl -H "X-User-ID: user-1" \
-  -H "Content-Type: application/json" \
-  -d '{"stream_ids":["stream-1","stream-2"]}' \
-  http://localhost:8080/v1/watch
-```
-
-## Configuration
-
-| Variable | Purpose | Default | Required |
-|----------|---------|---------|----------|
-| `TWITCH_CLIENT_ID` | Twitch OAuth client ID | — | For real OAuth |
-| `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | — | For real OAuth |
-| `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | — | For real OAuth |
-| `DATABASE_DSN` | PostgreSQL connection string | — | Optional (in-memory fallback) |
-| `TWITCH_ROOM_AUTH_TOKEN` | Bearer token for authentication | — | Optional (dev auth fallback) |
-| `PORT` | Service port | `8080` | No |
-| `ALLOW_DEV_AUTH` | Enable dev auth header | `false` | No |
-| `WATCH_STATE_TTL_MINUTES` | Watch state expiry (minutes) | `5` | No |
+| Variable | Purpose | Default in .env | Required | Notes |
+|----------|---------|-----------------|----------|-------|
+| `PORT` | Service port | `8080` | No | Container exposed port. |
+| `DATABASE_DSN` | PostgreSQL connection string | (Must be set) | Yes | Format: `postgres://user:pass@host:port/dbname` |
+| `TWITCH_CLIENT_ID` | Twitch OAuth client ID | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
+| `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
+| `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 
 ## API
 
