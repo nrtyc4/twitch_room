@@ -11,7 +11,9 @@ import (
 
 	"twitch_room/internal/auth"
 	"twitch_room/internal/config"
+	"twitch_room/internal/identity"
 	"twitch_room/internal/repository"
+	"twitch_room/internal/secrets"
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
 )
@@ -21,18 +23,34 @@ type watchRequest struct {
 }
 
 type server struct {
-	watchService   *service.Service
-	authMiddleware *auth.Middleware
-	rateLimiter    *security.RateLimiter
+	watchService     *service.Service
+	authMiddleware   *auth.Middleware
+	identityProvider identity.Provider
+	rateLimiter      *security.RateLimiter
 }
 
 func main() {
+	fmt.Println("Initializing twitch-room service")
+
+	// Load secrets (optional .env file for local development)
+	if err := secrets.LoadDotEnv(".env"); err != nil {
+		log.Printf("Warning: could not load .env file: %v", err)
+	}
+
+	// Load secrets from environment
+	sec, err := secrets.Load()
+	if err != nil {
+		log.Fatalf("Failed to load secrets: %v", err)
+	}
+
+	log.Printf("Secrets loaded: %s", sec)
+
 	cfg := config.Load()
 
 	var store repository.WatchStateStore
 
 	// Try PostgreSQL first if DSN is configured
-	dbDSN := cfg.DatabaseDSN
+	dbDSN := sec.DatabaseDSN
 	if dbDSN != "" {
 		pgStore, err := repository.NewPostgresStore(dbDSN)
 		if err != nil {
@@ -52,10 +70,19 @@ func main() {
 	repo := repository.NewServiceAdapter(store)
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
 
+	// Create identity provider with Twitch OAuth configuration
+	identityProvider := &identity.TwitchProvider{
+		ClientID:      sec.TwitchClientID,
+		ClientSecret:  sec.TwitchClientSecret,
+		RedirectURI:   sec.TwitchRedirectURI,
+		EnableDevAuth: cfg.AllowDevAuth,
+	}
+
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{ExpectedToken: cfg.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
-		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+		watchService:      svc,
+		authMiddleware:    &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
+		identityProvider:  identityProvider,
+		rateLimiter:       security.NewRateLimiter(30, time.Minute),
 	}
 
 	mux := http.NewServeMux()

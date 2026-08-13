@@ -24,7 +24,50 @@ This is the production-safe approach the service aims to use:
 
 ## Local development
 
-Run the service:
+### Setup with environment file
+
+1. Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` and fill in your configuration:
+```bash
+# For Twitch OAuth (recommended)
+TWITCH_CLIENT_ID=your_client_id
+TWITCH_CLIENT_SECRET=your_client_secret
+TWITCH_REDIRECT_URI=http://localhost:8080/callback
+
+# For database (optional, defaults to in-memory)
+DATABASE_DSN=postgres://user:password@localhost:5432/twitch_room
+
+# For development
+ALLOW_DEV_AUTH=true
+```
+
+3. Run the service:
+```bash
+go run .
+```
+
+The `.env` file is automatically excluded from git, so your secrets will not be committed.
+
+### Secrets Management
+
+Sensitive configuration is managed through:
+
+1. **Environment Variables** — Primary source of secrets (production-safe)
+2. **.env Files** — Local development convenience (excluded from git)
+3. **Validation** — Service requires valid secrets before startup
+
+Secrets are never logged or exposed in error messages.
+
+**Production Deployment:**
+- Use environment variables or secure vaults (HashiCorp Vault, AWS Secrets Manager, etc.)
+- Never commit `.env` or other secret files
+- Rotate credentials regularly
+
+### Run the service
 
 ```bash
 go run .
@@ -33,18 +76,24 @@ go run .
 Then send requests like:
 
 ```bash
-curl -H "Authorization: Bearer dev-token" -H "X-User-ID: user-1" \
+curl -H "X-User-ID: user-1" \
   -H "Content-Type: application/json" \
   -d '{"stream_ids":["stream-1","stream-2"]}' \
   http://localhost:8080/v1/watch
 ```
 
-Set the following environment variables for a stricter demo auth setup:
+## Configuration
 
-```bash
-export TWITCH_ROOM_AUTH_TOKEN="your-secret-token"
-export ALLOW_DEV_AUTH="true"
-```
+| Variable | Purpose | Default | Required |
+|----------|---------|---------|----------|
+| `TWITCH_CLIENT_ID` | Twitch OAuth client ID | — | For real OAuth |
+| `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | — | For real OAuth |
+| `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | — | For real OAuth |
+| `DATABASE_DSN` | PostgreSQL connection string | — | Optional (in-memory fallback) |
+| `TWITCH_ROOM_AUTH_TOKEN` | Bearer token for authentication | — | Optional (dev auth fallback) |
+| `PORT` | Service port | `8080` | No |
+| `ALLOW_DEV_AUTH` | Enable dev auth header | `false` | No |
+| `WATCH_STATE_TTL_MINUTES` | Watch state expiry (minutes) | `5` | No |
 
 ## API
 
