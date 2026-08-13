@@ -1,5 +1,4 @@
 package identity
-package identity
 
 import (
 	"context"

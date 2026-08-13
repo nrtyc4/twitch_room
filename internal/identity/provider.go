@@ -1,5 +1,4 @@
 package identity
-package identity
 
 import (
 	"context"
@@ -17,8 +16,8 @@ type Provider interface {
 }
 
 type TwitchProvider struct {
-	ClientID string
-	ClientSecret string
+	ClientID      string
+	ClientSecret  string
 	EnableDevAuth bool
 }
 
