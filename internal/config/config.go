@@ -10,6 +10,7 @@ type Config struct {
 	AuthToken        string
 	AllowDevAuth     bool
 	WatchStateTTLMin int
+	DatabaseDSN      string
 }
 
 func Load() Config {
@@ -36,5 +37,6 @@ func Load() Config {
 		AuthToken:        os.Getenv("TWITCH_ROOM_AUTH_TOKEN"),
 		AllowDevAuth:     allowDevAuth,
 		WatchStateTTLMin: ttlMinutes,
+		DatabaseDSN:      os.Getenv("DATABASE_DSN"),
 	}
 }

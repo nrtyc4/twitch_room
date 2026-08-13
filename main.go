@@ -29,7 +29,26 @@ type server struct {
 func main() {
 	cfg := config.Load()
 
-	store := repository.NewMemoryStore()
+	var store repository.WatchStateStore
+
+	// Try PostgreSQL first if DSN is configured
+	dbDSN := cfg.DatabaseDSN
+	if dbDSN != "" {
+		pgStore, err := repository.NewPostgresStore(dbDSN)
+		if err != nil {
+			log.Printf("WARNING: failed to connect to PostgreSQL: %v, falling back to in-memory store", err)
+			store = repository.NewMemoryStore()
+		} else {
+			log.Printf("Connected to PostgreSQL database")
+			store = pgStore
+			// Optionally defer cleanup (commented out for now as it would close on every request)
+			// defer pgStore.Close()
+		}
+	} else {
+		log.Printf("No database DSN configured, using in-memory store")
+		store = repository.NewMemoryStore()
+	}
+
 	repo := repository.NewServiceAdapter(store)
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
 
