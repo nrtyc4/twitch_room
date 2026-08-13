@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  twitch-room:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: twitch-room
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      ALLOW_DEV_AUTH: "true"
+      TWITCH_ROOM_AUTH_TOKEN: "dev-secret-token"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
