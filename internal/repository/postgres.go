@@ -129,7 +129,7 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 	`
 
 	rows, err := ps.db.Query(query, limit)
-	if err != nil {
+	if err != nil || rows.Err() != nil {
 		return []service.UserWatchState{}
 	}
 	defer rows.Close()
