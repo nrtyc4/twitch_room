@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"twitch_room/internal/performance"
 )
 
 var ErrInvalidIdentity = errors.New("invalid identity")
@@ -48,13 +51,28 @@ type twitchUserResponse struct {
 }
 
 func NewTwitchProvider() *TwitchProvider {
+	cfg := performance.DefaultHTTPClientConfig()
+
+	// Create a custom transport with connection pooling
+	transport := &http.Transport{
+		Dial: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).Dial,
+		MaxIdleConns:        cfg.MaxIdleConns,
+		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
+		MaxConnsPerHost:     cfg.MaxConnsPerHost,
+		IdleConnTimeout:     cfg.IdleConnTimeout,
+	}
+
 	return &TwitchProvider{
 		ClientID:      os.Getenv("TWITCH_CLIENT_ID"),
 		ClientSecret:  os.Getenv("TWITCH_CLIENT_SECRET"),
 		RedirectURI:   os.Getenv("TWITCH_REDIRECT_URI"),
 		EnableDevAuth: os.Getenv("ALLOW_DEV_AUTH") == "true",
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   cfg.Timeout,
+			Transport: transport,
 		},
 	}
 }

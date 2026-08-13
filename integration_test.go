@@ -11,6 +11,7 @@ import (
 
 	"twitch_room/internal/auth"
 	"twitch_room/internal/identity"
+	"twitch_room/internal/performance"
 	"twitch_room/internal/repository"
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
@@ -66,9 +67,10 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
 
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{AllowDevAuth: true},
-		rateLimiter:    security.NewRateLimiter(100, time.Minute),
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:      security.NewRateLimiter(100, time.Minute),
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
 	}
 
 	mux := http.NewServeMux()
@@ -117,9 +119,10 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 	svc := service.NewService(repo, 5*time.Minute)
 
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{AllowDevAuth: true},
-		rateLimiter:    security.NewRateLimiter(100, time.Minute),
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:      security.NewRateLimiter(100, time.Minute),
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
 	}
 
 	mux := http.NewServeMux()
@@ -171,9 +174,10 @@ func TestIntegrationRateLimitingEnforcement(t *testing.T) {
 	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
 
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{AllowDevAuth: true},
-		rateLimiter:    security.NewRateLimiter(3, time.Minute), // Limit to 3 requests per minute
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:      security.NewRateLimiter(3, time.Minute), // Limit to 3 requests per minute
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
 	}
 
 	mux := http.NewServeMux()
@@ -218,9 +222,10 @@ func TestIntegrationAuthMiddlewareWithVariousTokenTypes(t *testing.T) {
 	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
 
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{AllowDevAuth: true},
-		rateLimiter:    security.NewRateLimiter(100, time.Minute),
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:      security.NewRateLimiter(100, time.Minute),
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
 	}
 
 	mux := http.NewServeMux()
@@ -279,9 +284,10 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	svc := service.NewService(repo, 5*time.Minute)
 
 	s := &server{
-		watchService:   svc,
-		authMiddleware: &auth.Middleware{AllowDevAuth: true},
-		rateLimiter:    security.NewRateLimiter(100, time.Minute),
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:      security.NewRateLimiter(100, time.Minute),
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
 	}
 
 	mux := http.NewServeMux()

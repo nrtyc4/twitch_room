@@ -12,6 +12,7 @@ import (
 	"twitch_room/internal/auth"
 	"twitch_room/internal/config"
 	"twitch_room/internal/identity"
+	"twitch_room/internal/performance"
 	"twitch_room/internal/repository"
 	"twitch_room/internal/secrets"
 	"twitch_room/internal/security"
@@ -27,6 +28,7 @@ type server struct {
 	authMiddleware   *auth.Middleware
 	identityProvider identity.Provider
 	rateLimiter      *security.RateLimiter
+	watchStateCache  *performance.WatchStateCache
 }
 
 func main() {
@@ -78,11 +80,16 @@ func main() {
 		EnableDevAuth: cfg.AllowDevAuth,
 	}
 
+	// Create watch state cache with same TTL as service
+	cacheTTL := time.Duration(cfg.WatchStateTTLMin) * time.Minute
+	watchStateCache := performance.NewWatchStateCache(cacheTTL)
+
 	s := &server{
-		watchService:      svc,
-		authMiddleware:    &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
-		identityProvider:  identityProvider,
-		rateLimiter:       security.NewRateLimiter(30, time.Minute),
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
+		identityProvider: identityProvider,
+		rateLimiter:      security.NewRateLimiter(30, time.Minute),
+		watchStateCache:  watchStateCache,
 	}
 
 	mux := http.NewServeMux()
@@ -118,6 +125,13 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
+		// Try cache first
+		if cached, ok := s.watchStateCache.Get(userID); ok {
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+
+		// Cache miss - fetch from service
 		state, err := s.watchService.GetUserWatchState(userID)
 		if err != nil {
 			if errors.Is(err, service.ErrUserNotFound) {
@@ -127,6 +141,9 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+
+		// Cache the result
+		s.watchStateCache.Set(userID, state)
 		writeJSON(w, http.StatusOK, state)
 		return
 	}
@@ -156,6 +173,9 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Invalidate cache on write
+	s.watchStateCache.Invalidate(userID)
+
 	writeJSON(w, http.StatusCreated, state)
 }
 
@@ -183,6 +203,13 @@ func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try cache first
+	if cached, ok := s.watchStateCache.Get(pathUserID); ok {
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
+
+	// Cache miss - fetch from service
 	state, err := s.watchService.GetUserWatchState(pathUserID)
 	if err != nil {
 		if errors.Is(err, service.ErrUserNotFound) {
@@ -193,6 +220,8 @@ func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cache the result
+	s.watchStateCache.Set(pathUserID, state)
 	writeJSON(w, http.StatusOK, state)
 }
 

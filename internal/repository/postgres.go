@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"twitch_room/internal/performance"
 	"twitch_room/internal/service"
 
 	"github.com/lib/pq"
@@ -17,11 +18,19 @@ type PostgresStore struct {
 
 // NewPostgresStore creates a new PostgreSQL-backed repository.
 // dsn should be a PostgreSQL connection string (e.g., "postgres://user:pass@localhost/dbname")
+// It configures connection pooling for optimal performance under load.
 func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Configure connection pooling
+	cfg := performance.DefaultConnectionPoolConfig()
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)

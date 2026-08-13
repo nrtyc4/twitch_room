@@ -8,51 +8,51 @@ import (
 
 func TestSecretsValidateOAuth(t *testing.T) {
 	tests := []struct {
-		name              string
-		clientID          string
-		clientSecret      string
-		redirectURI       string
-		shouldErr         bool
+		name               string
+		clientID           string
+		clientSecret       string
+		redirectURI        string
+		shouldErr          bool
 		expectedConfigured bool
 	}{
 		{
-			name:              "all OAuth secrets present",
-			clientID:          "test-client-id",
-			clientSecret:      "test-client-secret",
-			redirectURI:       "http://localhost/callback",
-			shouldErr:         false,
+			name:               "all OAuth secrets present",
+			clientID:           "test-client-id",
+			clientSecret:       "test-client-secret",
+			redirectURI:        "http://localhost/callback",
+			shouldErr:          false,
 			expectedConfigured: true,
 		},
 		{
-			name:              "no OAuth secrets present",
-			clientID:          "",
-			clientSecret:      "",
-			redirectURI:       "",
-			shouldErr:         false,
+			name:               "no OAuth secrets present",
+			clientID:           "",
+			clientSecret:       "",
+			redirectURI:        "",
+			shouldErr:          false,
 			expectedConfigured: false,
 		},
 		{
-			name:              "only client ID present",
-			clientID:          "test-client-id",
-			clientSecret:      "",
-			redirectURI:       "",
-			shouldErr:         true,
+			name:               "only client ID present",
+			clientID:           "test-client-id",
+			clientSecret:       "",
+			redirectURI:        "",
+			shouldErr:          true,
 			expectedConfigured: false,
 		},
 		{
-			name:              "only client secret present",
-			clientID:          "",
-			clientSecret:      "test-client-secret",
-			redirectURI:       "",
-			shouldErr:         true,
+			name:               "only client secret present",
+			clientID:           "",
+			clientSecret:       "test-client-secret",
+			redirectURI:        "",
+			shouldErr:          true,
 			expectedConfigured: false,
 		},
 		{
-			name:              "only redirect URI present",
-			clientID:          "",
-			clientSecret:      "",
-			redirectURI:       "http://localhost/callback",
-			shouldErr:         true,
+			name:               "only redirect URI present",
+			clientID:           "",
+			clientSecret:       "",
+			redirectURI:        "http://localhost/callback",
+			shouldErr:          true,
 			expectedConfigured: false,
 		},
 	}
