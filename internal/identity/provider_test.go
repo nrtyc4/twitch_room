@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -56,5 +57,51 @@ func TestTwitchProviderFallsBackToDevAuthWhenNoValidBearerToken(t *testing.T) {
 	}
 	if userID != "fallback-user" {
 		t.Fatalf("expected fallback-user, got %s", userID)
+	}
+}
+
+func TestTwitchProviderBuildAuthorizeURL(t *testing.T) {
+	provider := &TwitchProvider{
+		ClientID:    "client-id-123",
+		RedirectURI: "https://app.example.com/auth/twitch/callback",
+	}
+
+	authURL, err := provider.BuildAuthorizeURL("state-token", []string{"openid", "user:read:follows"})
+	if err != nil {
+		t.Fatalf("expected authorize URL to build, got error: %v", err)
+	}
+
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("failed to parse authorize URL: %v", err)
+	}
+
+	if parsed.Scheme != "https" || parsed.Host != "id.twitch.tv" || parsed.Path != "/oauth2/authorize" {
+		t.Fatalf("unexpected authorize URL: %s", authURL)
+	}
+
+	q := parsed.Query()
+	if q.Get("client_id") != "client-id-123" {
+		t.Fatalf("expected client_id, got %q", q.Get("client_id"))
+	}
+	if q.Get("redirect_uri") != "https://app.example.com/auth/twitch/callback" {
+		t.Fatalf("expected redirect_uri, got %q", q.Get("redirect_uri"))
+	}
+	if q.Get("response_type") != "code" {
+		t.Fatalf("expected response_type=code, got %q", q.Get("response_type"))
+	}
+	if q.Get("state") != "state-token" {
+		t.Fatalf("expected state, got %q", q.Get("state"))
+	}
+	if q.Get("scope") != "openid user:read:follows" {
+		t.Fatalf("expected scopes, got %q", q.Get("scope"))
+	}
+}
+
+func TestTwitchProviderBuildAuthorizeURLMissingCredentials(t *testing.T) {
+	provider := &TwitchProvider{}
+
+	if _, err := provider.BuildAuthorizeURL("state", nil); err == nil {
+		t.Fatal("expected missing client credentials to fail")
 	}
 }

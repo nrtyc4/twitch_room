@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -368,4 +369,93 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	}
 
 	t.Logf("Full request cycle integration test passed")
+}
+
+// stubProvider is a minimal identity.Provider for wiring tests.
+type stubProvider struct {
+	resolvedUserID string
+	resolveErr     error
+	authorizeURL   string
+	authorizeErr   error
+}
+
+func (s *stubProvider) ResolveUserID(ctx context.Context, r *http.Request) (string, error) {
+	return s.resolvedUserID, s.resolveErr
+}
+
+func (s *stubProvider) BuildAuthorizeURL(state string, scopes []string) (string, error) {
+	return s.authorizeURL, s.authorizeErr
+}
+
+// TestIntegrationTwitchLoginCallbackFlow tests the /auth/twitch login redirect
+// and /auth/twitch/callback routes with a stub identity provider.
+func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
+	store := repository.NewMemoryStore()
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+
+	provider := &stubProvider{
+		resolvedUserID: "twitch-login-user",
+		authorizeURL:   "https://id.twitch.tv/oauth2/authorize?client_id=stub",
+	}
+
+	s := &server{
+		watchService:     svc,
+		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
+		identityProvider: provider,
+		rateLimiter:      security.NewRateLimiter(100, time.Minute),
+		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
+	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	// Test 1: Login redirects with a 302 to the Twitch authorize URL.
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	loginReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch", nil)
+	loginResp, err := client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 from login, got %d", loginResp.StatusCode)
+	}
+	loc := loginResp.Header.Get("Location")
+	if loc != "https://id.twitch.tv/oauth2/authorize?client_id=stub" {
+		t.Fatalf("expected redirect to Twitch authorize URL, got %q", loc)
+	}
+
+	// Test 2: Callback with a code resolves the user and returns the user id.
+	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?code=abc123", nil)
+	callbackResp, err := client.Do(callbackReq)
+	if err != nil {
+		t.Fatalf("callback request failed: %v", err)
+	}
+	if callbackResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from callback, got %d", callbackResp.StatusCode)
+	}
+
+	var cb map[string]string
+	if err := json.NewDecoder(callbackResp.Body).Decode(&cb); err != nil {
+		t.Fatalf("failed to decode callback response: %v", err)
+	}
+	if cb["user_id"] != "twitch-login-user" {
+		t.Fatalf("expected user_id 'twitch-login-user', got %q", cb["user_id"])
+	}
+
+	// Test 3: Callback without a code returns 400.
+	badReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback", nil)
+	badResp, _ := client.Do(badReq)
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing code, got %d", badResp.StatusCode)
+	}
+
+	t.Logf("Twitch login/callback flow integration test passed")
 }

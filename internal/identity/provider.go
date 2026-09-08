@@ -19,12 +19,14 @@ import (
 var ErrInvalidIdentity = errors.New("invalid identity")
 
 const (
-	TwitchAuthURL     = "https://id.twitch.tv/oauth2/token"
-	TwitchUserInfoURL = "https://api.twitch.tv/helix/users"
+	TwitchAuthorizeURL = "https://id.twitch.tv/oauth2/authorize"
+	TwitchAuthURL      = "https://id.twitch.tv/oauth2/token"
+	TwitchUserInfoURL  = "https://api.twitch.tv/helix/users"
 )
 
 type Provider interface {
 	ResolveUserID(ctx context.Context, r *http.Request) (string, error)
+	BuildAuthorizeURL(state string, scopes []string) (string, error)
 }
 
 type TwitchProvider struct {
@@ -75,6 +77,25 @@ func NewTwitchProvider() *TwitchProvider {
 			Transport: transport,
 		},
 	}
+}
+
+// BuildAuthorizeURL returns the Twitch OAuth 2.0 authorization URL that the
+// client should be redirected to in order to start the login flow.
+func (p *TwitchProvider) BuildAuthorizeURL(state string, scopes []string) (string, error) {
+	if p.ClientID == "" || p.RedirectURI == "" {
+		return "", fmt.Errorf("%w: missing client credentials", ErrInvalidIdentity)
+	}
+
+	params := url.Values{}
+	params.Set("client_id", p.ClientID)
+	params.Set("redirect_uri", p.RedirectURI)
+	params.Set("response_type", "code")
+	params.Set("state", state)
+	if len(scopes) > 0 {
+		params.Set("scope", strings.Join(scopes, " "))
+	}
+
+	return TwitchAuthorizeURL + "?" + params.Encode(), nil
 }
 
 // exchangeCodeForToken performs the OAuth 2.0 authorization code exchange with Twitch.

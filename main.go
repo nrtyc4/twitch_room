@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -97,6 +99,8 @@ func main() {
 	mux.HandleFunc("/v1/watch", s.handleWatch)
 	mux.HandleFunc("/v1/users/", s.handleUserWatch)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
+	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
+	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 
 	log.Printf("twitch-room service starting on :%s", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, withLogging(mux)); err != nil {
@@ -246,16 +250,70 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, feed)
 }
 
+func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	state := r.URL.Query().Get("state")
+	if state == "" {
+		state = randomState()
+	}
+
+	authURL, err := s.identityProvider.BuildAuthorizeURL(state, nil)
+	if err != nil {
+		log.Printf("failed to build authorize URL: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "OAuth not configured"})
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing code"})
+		return
+	}
+
+	userID, err := s.identityProvider.ResolveUserID(r.Context(), r)
+	if err != nil {
+		log.Printf("failed to resolve user id from OAuth code: %v", err)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"user_id": userID})
+}
+
 func (s *server) requireUser(r *http.Request) (string, bool) {
 	if userID, ok := auth.UserIDFromContext(r.Context()); ok && userID != "" {
 		return userID, true
 	}
 
 	userID, err := s.authMiddleware.UserID(r)
-	if err != nil {
-		return "", false
+	if err == nil {
+		return userID, true
 	}
-	return userID, true
+
+	// Fall back to the identity provider, which validates real Twitch OAuth
+	// bearer tokens (and dev auth when enabled).
+	if s.identityProvider != nil {
+		userID, err = s.identityProvider.ResolveUserID(r.Context(), r)
+		if err != nil {
+			return "", false
+		}
+		return userID, true
+	}
+
+	return "", false
 }
 
 func withLogging(next http.Handler) http.Handler {
@@ -264,6 +322,14 @@ func withLogging(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
 	})
+}
+
+func randomState() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
