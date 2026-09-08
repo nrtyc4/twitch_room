@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"twitch_room/internal/auth"
@@ -102,6 +105,12 @@ func main() {
 		log.Fatal("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
 	}
 
+	// Stop serving gracefully when the process receives an interrupt or a
+	// termination signal: cancel the background refresh loop and drain
+	// in-flight requests before exiting.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var store repository.WatchStateStore
 
 	// Try PostgreSQL first if DSN is configured
@@ -161,17 +170,22 @@ func main() {
 		go func() {
 			ticker := time.NewTicker(refreshInterval)
 			defer ticker.Stop()
-			for range ticker.C {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				refreshed, err := svc.RefreshWatchStates(ctx)
-				cancel()
-				if err != nil {
-					log.Printf("watch state refresh failed: %v", err)
-					continue
-				}
-				if len(refreshed) > 0 {
-					watchStateCache.InvalidateAll()
-					log.Printf("refreshed metadata for %d watch state(s)", len(refreshed))
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					refCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					refreshed, err := svc.RefreshWatchStates(refCtx)
+					cancel()
+					if err != nil {
+						log.Printf("watch state refresh failed: %v", err)
+						continue
+					}
+					if len(refreshed) > 0 {
+						watchStateCache.InvalidateAll()
+						log.Printf("refreshed metadata for %d watch state(s)", len(refreshed))
+					}
 				}
 			}
 		}()
@@ -238,14 +252,7 @@ func main() {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	if !cfg.TLSEnabled {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Fatalf("server failed: %v", err)
-		}
-		return
-	}
-
-	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+	if cfg.TLSEnabled && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
 		log.Fatal("TLS_ENABLED is true but TLS_CERT_FILE / TLS_KEY_FILE are not set")
 	}
 
@@ -253,10 +260,11 @@ func main() {
 	// listener (e.g. :80 -> :443) for users connecting without a reverse proxy.
 	// The redirect target host is validated against the allowlist, and proxy
 	// headers are only honoured when the connection comes from a trusted CIDR.
-	if cfg.TLSPort != "" {
+	var redirector *http.Server
+	if cfg.TLSEnabled && cfg.TLSPort != "" {
 		trusted := func(r *http.Request) bool { return security.TrustedRequest(r, cfg.TrustedProxyCIDRs) }
 		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
-		redirector := &http.Server{
+		redirector = &http.Server{
 			Addr: ":" + cfg.TLSPort,
 			Handler: security.ForceHTTPS(cfg.AllowedHosts, isHTTPS)(
 				http.NotFoundHandler(),
@@ -272,8 +280,33 @@ func main() {
 		}()
 	}
 
-	if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
-		log.Fatalf("server failed: %v", err)
+	// Serve until the listener fails or a shutdown signal arrives.
+	errCh := make(chan error, 1)
+	go func() {
+		if cfg.TLSEnabled {
+			errCh <- srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			errCh <- srv.ListenAndServe()
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutdown signal received, draining connections")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if redirector != nil {
+			_ = redirector.Shutdown(shutdownCtx)
+		}
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+			_ = srv.Close()
+		}
+		log.Printf("server stopped")
 	}
 }
 
