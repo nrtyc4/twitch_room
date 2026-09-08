@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"testing"
 )
@@ -72,7 +73,8 @@ func TestLoadHardeningDefaults(t *testing.T) {
 	_ = os.Unsetenv("TLS_KEY_FILE")
 	_ = os.Unsetenv("TLS_REDIRECT_PORT")
 	_ = os.Unsetenv("COOKIE_SECURE")
-	_ = os.Unsetenv("TRUST_PROXY_HEADERS")
+	_ = os.Unsetenv("ALLOWED_HOSTS")
+	_ = os.Unsetenv("TRUSTED_PROXY_CIDRS")
 
 	cfg := Load()
 	if cfg.AppEnv != "" {
@@ -87,8 +89,11 @@ func TestLoadHardeningDefaults(t *testing.T) {
 	if cfg.SecureCookies {
 		t.Fatal("expected SecureCookies false by default")
 	}
-	if cfg.TrustProxyHeaders {
-		t.Fatal("expected TrustProxyHeaders false by default")
+	if len(cfg.AllowedHosts) != 0 {
+		t.Fatalf("expected empty AllowedHosts, got %v", cfg.AllowedHosts)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("expected empty TrustedProxyCIDRs, got %v", cfg.TrustedProxyCIDRs)
 	}
 }
 
@@ -99,7 +104,8 @@ func TestLoadReadsHardeningEnvironment(t *testing.T) {
 	_ = os.Setenv("TLS_KEY_FILE", "/certs/privkey.pem")
 	_ = os.Setenv("TLS_REDIRECT_PORT", "80")
 	_ = os.Setenv("COOKIE_SECURE", "true")
-	_ = os.Setenv("TRUST_PROXY_HEADERS", "true")
+	_ = os.Setenv("ALLOWED_HOSTS", "App.example.com, app.example.com:8443, evil.invalid")
+	_ = os.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 127.0.0.1/32, not-a-cidr")
 	defer func() {
 		_ = os.Unsetenv("APP_ENV")
 		_ = os.Unsetenv("TLS_ENABLED")
@@ -107,7 +113,8 @@ func TestLoadReadsHardeningEnvironment(t *testing.T) {
 		_ = os.Unsetenv("TLS_KEY_FILE")
 		_ = os.Unsetenv("TLS_REDIRECT_PORT")
 		_ = os.Unsetenv("COOKIE_SECURE")
-		_ = os.Unsetenv("TRUST_PROXY_HEADERS")
+		_ = os.Unsetenv("ALLOWED_HOSTS")
+		_ = os.Unsetenv("TRUSTED_PROXY_CIDRS")
 	}()
 
 	cfg := Load()
@@ -126,8 +133,13 @@ func TestLoadReadsHardeningEnvironment(t *testing.T) {
 	if !cfg.SecureCookies {
 		t.Fatal("expected SecureCookies true")
 	}
-	if !cfg.TrustProxyHeaders {
-		t.Fatal("expected TrustProxyHeaders true")
+	if len(cfg.AllowedHosts) != 3 || cfg.AllowedHosts[0] != "app.example.com" {
+		t.Fatalf("expected normalised allowed hosts, got %v", cfg.AllowedHosts)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 ||
+		cfg.TrustedProxyCIDRs[0] != netip.MustParsePrefix("10.0.0.0/8") ||
+		cfg.TrustedProxyCIDRs[1] != netip.MustParsePrefix("127.0.0.1/32") {
+		t.Fatalf("expected parsed proxy CIDRs, got %v", cfg.TrustedProxyCIDRs)
 	}
 }
 

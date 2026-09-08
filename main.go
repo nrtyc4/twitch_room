@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ type server struct {
 	oauthStates        *oauthStateStore
 	sessions           *sessionStore
 	redirectAfterLogin string
-	trustProxy         bool
+	trustedProxyCIDRs  []netip.Prefix
 }
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
@@ -186,7 +187,7 @@ func main() {
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
 		sessions:           sessions,
 		redirectAfterLogin: cfg.RedirectAfterLogin,
-		trustProxy:         cfg.TrustProxyHeaders,
+		trustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
 	}
 
 	if cfg.SecureCookies {
@@ -222,7 +223,9 @@ func main() {
 	handler = security.MaxBodyBytes(1 << 20)(handler)
 	handler = security.SecurityHeaders(cfg.TLSEnabled)(handler)
 	if cfg.TLSEnabled {
-		handler = security.ForceHTTPS(cfg.TrustProxyHeaders)(handler)
+		trusted := func(r *http.Request) bool { return security.TrustedRequest(r, cfg.TrustedProxyCIDRs) }
+		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
+		handler = security.ForceHTTPS(cfg.AllowedHosts, isHTTPS)(handler)
 	}
 
 	srv := &http.Server{
@@ -248,13 +251,15 @@ func main() {
 
 	// Optionally keep a plain-HTTP redirector running alongside the HTTPS
 	// listener (e.g. :80 -> :443) for users connecting without a reverse proxy.
+	// The redirect target host is validated against the allowlist, and proxy
+	// headers are only honoured when the connection comes from a trusted CIDR.
 	if cfg.TLSPort != "" {
+		trusted := func(r *http.Request) bool { return security.TrustedRequest(r, cfg.TrustedProxyCIDRs) }
+		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
 		redirector := &http.Server{
 			Addr: ":" + cfg.TLSPort,
-			Handler: security.ForceHTTPS(true)(
-				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Redirect(w, r, "https://"+r.Host+r.URL.Path, http.StatusMovedPermanently)
-				}),
+			Handler: security.ForceHTTPS(cfg.AllowedHosts, isHTTPS)(
+				http.NotFoundHandler(),
 			),
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       60 * time.Second,
@@ -735,11 +740,17 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// trustedRequest reports whether the request came from a proxy network we
+// trust to supply X-Forwarded-* headers.
+func (s *server) trustedRequest(r *http.Request) bool {
+	return security.TrustedRequest(r, s.trustedProxyCIDRs)
+}
+
 // rateLimitByIP applies the auth endpoint rate limit keyed by client IP.
 // Both the login and callback endpoints trigger outbound calls to Twitch, so
 // they are throttled independently of per-user API limits.
 func (s *server) rateLimitByIP(w http.ResponseWriter, r *http.Request) bool {
-	if s.authLimiter != nil && !s.authLimiter.Allow(security.ClientIP(r, s.trustProxy)) {
+	if s.authLimiter != nil && !s.authLimiter.Allow(security.ClientIP(r, s.trustedRequest(r))) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return false
 	}

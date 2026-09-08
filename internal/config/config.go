@@ -1,8 +1,10 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -31,9 +33,14 @@ type Config struct {
 	// reverse proxy in front of this service).
 	SecureCookies bool
 
-	// TrustProxyHeaders makes the service honour X-Forwarded-For /
-	// X-Forwarded-Proto. Only enable when a proxy you control sets them.
-	TrustProxyHeaders bool
+	// AllowedHosts is the whitelist of Host header values the service may
+	// redirect to (HTTP->HTTPS and OAuth redirects). Empty accepts any host.
+	AllowedHosts []string
+
+	// TrustedProxyCIDRs lists the networks whose X-Forwarded-For and
+	// X-Forwarded-Proto headers the service honours. Empty trusts nobody,
+	// so forwarded headers are ignored.
+	TrustedProxyCIDRs []netip.Prefix
 }
 
 func Load() Config {
@@ -72,7 +79,6 @@ func Load() Config {
 
 	tlsEnabled := boolEnv("TLS_ENABLED")
 	secureCookies := boolEnv("COOKIE_SECURE")
-	trustProxyHeaders := boolEnv("TRUST_PROXY_HEADERS")
 
 	return Config{
 		Port:                port,
@@ -88,8 +94,35 @@ func Load() Config {
 		TLSKeyFile:          os.Getenv("TLS_KEY_FILE"),
 		TLSPort:             os.Getenv("TLS_REDIRECT_PORT"),
 		SecureCookies:       secureCookies,
-		TrustProxyHeaders:   trustProxyHeaders,
+		AllowedHosts:         splitList(os.Getenv("ALLOWED_HOSTS")),
+		TrustedProxyCIDRs:    parseCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS")),
 	}
+}
+
+// splitList splits a comma-separated environment value into trimmed,
+// lower-cased, non-empty entries.
+func splitList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// parseCIDRs parses a comma-separated list of IPv4/IPv6 CIDR networks,
+// silently skipping entries that are not valid prefixes.
+func parseCIDRs(value string) []netip.Prefix {
+	out := make([]netip.Prefix, 0)
+	for _, p := range splitList(value) {
+		if prefix, err := netip.ParsePrefix(p); err == nil {
+			out = append(out, prefix)
+		}
+	}
+	return out
 }
 
 // boolEnv parses an environment variable as a boolean, treating empty values

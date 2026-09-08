@@ -61,7 +61,8 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | PEM certificate and key paths | (empty) | With `TLS_ENABLED` | Loaded by the HTTPS listener. |
 | `TLS_REDIRECT_PORT` | Optional plain-HTTP port that 301s to HTTPS | (empty) | No | e.g. `80` → HTTPS on `PORT`. |
 | `COOKIE_SECURE` | Force `Secure` on session cookies | `false` | Behind a TLS proxy | Set when TLS terminates at a reverse proxy so cookies are still Secure. |
-| `TRUST_PROXY_HEADERS` | Honour `X-Forwarded-For`/`X-Forwarded-Proto` | `false` | Behind a proxy | Only enable when requests come via a proxy you control. |
+| `TRUSTED_PROXY_CIDRS` | Comma-separated proxy networks (`10.0.0.0/8`) whose `X-Forwarded-For`/`X-Forwarded-Proto` headers are honoured | (empty) | Behind a proxy | Empty trusts nobody; forwarded headers are ignored unless the connection source matches. |
+| `ALLOWED_HOSTS` | Comma-separated list of Host values redirected to by the HTTPS redirector | (empty) | No | Requests for other hosts get `400` (prevents host-header injection / open redirects). |
 | `APP_ENV` | `production` or empty | (empty) | No | Refuses to start if combined with `ALLOW_DEV_AUTH=true`. |
 
 ## Authentication

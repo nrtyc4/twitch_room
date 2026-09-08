@@ -3,6 +3,7 @@ package security
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 )
 
@@ -48,14 +49,19 @@ func MaxBodyBytes(limit int64) func(http.Handler) http.Handler {
 }
 
 // ForceHTTPS returns middleware that redirects plain-HTTP requests to their
-// https:// equivalent. Requests already served over TLS pass through. The
-// scheme is taken from X-Forwarded-Proto when trustProxy is set, otherwise an
-// actual TLS connection is required.
-func ForceHTTPS(trustProxy bool) func(http.Handler) http.Handler {
+// https:// equivalent. Requests isHTTPS reports as already-secure pass through.
+// Redirect targets are built from the request Host, which is only used when it
+// is present in allowedHosts (an empty list accepts any host); otherwise the
+// request is rejected with 400 to prevent host-header injection.
+func ForceHTTPS(allowedHosts []string, isHTTPS func(r *http.Request) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isHTTPS(r, trustProxy) {
+			if isHTTPS(r) {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if !AllowedHost(r.Host, allowedHosts) {
+				http.Error(w, "invalid host", http.StatusBadRequest)
 				return
 			}
 			u := *r.URL
@@ -66,17 +72,62 @@ func ForceHTTPS(trustProxy bool) func(http.Handler) http.Handler {
 	}
 }
 
-func isHTTPS(r *http.Request, trustProxy bool) bool {
-	if trustProxy && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+// HTTPSRequest reports whether a request arrived securely: over a real TLS
+// connection, or via an X-Forwarded-Proto: https header when that header is
+// only trusted from a proxy source (trusted).
+func HTTPSRequest(r *http.Request, trusted bool) bool {
+	if trusted && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		return true
 	}
 	return r.TLS != nil
 }
 
+// TrustedRequest reports whether the request's remote address is inside one of
+// the trusted proxy networks. With no CIDRs configured, no source is trusted.
+func TrustedRequest(r *http.Request, cidrs []netip.Prefix) bool {
+	if len(cidrs) == 0 {
+		return false
+	}
+	host := ClientIP(r, false)
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	for _, prefix := range cidrs {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowedHost reports whether a Host header value is acceptable as a redirect
+// target. An empty allowlist accepts anything. Comparison ignores ports so both
+// "example.com" and "example.com:8443" match the entry "example.com".
+func AllowedHost(host string, allowedHosts []string) bool {
+	if len(allowedHosts) == 0 {
+		return true
+	}
+	expected := hostnameOnly(host)
+	for _, allowed := range allowedHosts {
+		if hostnameOnly(allowed) == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func hostnameOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.ToLower(h)
+	}
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
 // ClientIP returns the caller's IP address, honouring X-Forwarded-For only
-// when trustProxy is enabled (a proxy you control sets it).
-func ClientIP(r *http.Request, trustProxy bool) string {
-	if trustProxy {
+// when the request came from a trusted proxy.
+func ClientIP(r *http.Request, trusted bool) string {
+	if trusted {
 		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 			first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
 			if first != "" {

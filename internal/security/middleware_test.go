@@ -1,9 +1,11 @@
 package security
 
 import (
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -111,8 +113,14 @@ func TestMaxBodyBytesRejectsOversizedChunkedBodies(t *testing.T) {
 	}
 }
 
+func plainHTTPSDetector() func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		return r.TLS != nil
+	}
+}
+
 func TestForceHTTPSRedirectsPlainHTTP(t *testing.T) {
-	middleware := ForceHTTPS(false)
+	middleware := ForceHTTPS(nil, plainHTTPSDetector())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/feed?x=1", nil)
 
@@ -130,9 +138,10 @@ func TestForceHTTPSRedirectsPlainHTTP(t *testing.T) {
 }
 
 func TestForceHTTPSAllowsTLS(t *testing.T) {
-	middleware := ForceHTTPS(false)
+	middleware := ForceHTTPS(nil, plainHTTPSDetector())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	req.TLS = &tls.ConnectionState{}
 
 	reached := false
 	middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
@@ -141,6 +150,126 @@ func TestForceHTTPSAllowsTLS(t *testing.T) {
 
 	if !reached {
 		t.Fatal("handler was not reached over TLS")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestForceHTTPSHonoursTrustedForwardedProto(t *testing.T) {
+	base := plainHTTPSDetector()
+	isHTTPS := func(r *http.Request) bool {
+		if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			return true
+		}
+		return base(r)
+	}
+	middleware := ForceHTTPS(nil, isHTTPS)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	reached := false
+	middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		reached = true
+	})).ServeHTTP(rec, req)
+
+	if !reached {
+		t.Fatal("expected forwarded https request to pass through")
+	}
+}
+
+func TestForceHTTPSRejectsUnexpectedHost(t *testing.T) {
+	middleware := ForceHTTPS([]string{"app.example.com"}, plainHTTPSDetector())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/feed", nil)
+	req.Host = "evil.example.net"
+
+	middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be reached for a disallowed host")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for disallowed host, got %d", rec.Code)
+	}
+}
+
+func TestForceHTTPSRedirectsOnlyAllowedHosts(t *testing.T) {
+	middleware := ForceHTTPS([]string{"app.example.com"}, plainHTTPSDetector())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/feed", nil)
+	req.Host = "app.example.com:443"
+
+	middleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be reached")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("expected 301, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "https://app.example.com:443/feed" {
+		t.Fatalf("unexpected redirect location %q", loc)
+	}
+}
+
+func TestAllowedHost(t *testing.T) {
+	for _, test := range []struct {
+		host    string
+		allowed []string
+		want    bool
+	}{
+		{"app.example.com", []string{"app.example.com"}, true},
+		{"app.example.com:8443", []string{"app.example.com"}, true},
+		{"app.example.com", []string{"other.example.com"}, false},
+		{"EVIL.example.com", []string{"app.example.com"}, false},
+		{"app.example.com", nil, true},
+		{"anything.dev", []string{}, true},
+	} {
+		if got := AllowedHost(test.host, test.allowed); got != test.want {
+			t.Errorf("AllowedHost(%q, %v) = %v, want %v", test.host, test.allowed, got, test.want)
+		}
+	}
+}
+
+func TestTrustedRequest(t *testing.T) {
+	cidrs := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("127.0.0.1/32")}
+
+	inside := httptest.NewRequest(http.MethodGet, "/", nil)
+	inside.RemoteAddr = "10.1.2.3:5555"
+	if !TrustedRequest(inside, cidrs) {
+		t.Error("expected 10.1.2.3 to be trusted")
+	}
+
+	outside := httptest.NewRequest(http.MethodGet, "/", nil)
+	outside.RemoteAddr = "203.0.113.7:5555"
+	if TrustedRequest(outside, cidrs) {
+		t.Error("expected 203.0.113.7 to be untrusted")
+	}
+
+	if TrustedRequest(inside, nil) {
+		t.Error("expected no trust with empty CIDR list")
+	}
+}
+
+func TestHTTPSRequest(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	if HTTPSRequest(req, false) {
+		t.Error("expected plain request to be non-HTTPS")
+	}
+	req.Header.Set("X-Forwarded-Proto", "https")
+	if HTTPSRequest(req, false) {
+		t.Error("expected forwarded https to be ignored when untrusted")
+	}
+	if !HTTPSRequest(req, true) {
+		t.Error("expected forwarded https to count when trusted")
+	}
+
+	tlsReq := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	tlsReq.TLS = &tls.ConnectionState{}
+	tlsReq.Header.Set("X-Forwarded-Proto", "http")
+	if !HTTPSRequest(tlsReq, false) {
+		t.Error("expected a real TLS connection to count regardless of headers")
 	}
 }
 
