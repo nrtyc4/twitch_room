@@ -105,16 +105,18 @@ The `state` parameter is stored server-side at the start of the flow and verifie
 The service ships a small embedded single-page app (no build step, no external CDNs). Open the service root in a browser (`http://localhost:8080/` when running locally or via Docker):
 
 - **Identity:** the bar at the top accepts a user id directly (dev auth) or you can start the real flow with **Login with Twitch**, which redirects back to `/` with the resolved `user_id` in the query string.
-- **My watch:** publish or clear the streams you are currently viewing (raw channel names or full `twitch.tv` URLs).
-- **Feed:** shows watch state from publishers you follow with an active subscription, auto-refreshing.
+- **My watch:** publish or clear the streams you are currently viewing (raw channel names or full `twitch.tv` URLs). Streams are resolved against the Twitch API when credentials are configured, so the feed shows live titles, games, thumbnails, and viewer counts.
+- **Feed:** shows watch state from publishers you follow with an active subscription, auto-refreshing. Each published stream renders as a card with its thumbnail, channel name, title, game, and a live badge.
 - **People:** follow/unfollow other users by id.
 - **Requests:** approve or reject pending subscribe requests when you run `approved` mode.
 - **Settings:** choose `open`/`approved` subscription mode and `public`/`subscribers`/`private` visibility.
 
-The UI authenticates with the `X-User-ID` header. In real deployments that trust Twitch OAuth but not raw user ids, a session-cookie flow will be needed before this UI is production-safe.
+The UI authenticates with the `X-User-ID` header (dev auth) or automatically via the session cookie issued after a real Twitch login. In real deployments the session cookie path should be preferred over trusting client-supplied user ids.
 
 ## API
 
+- `Publish` request body: `{"stream_ids": ["shroud", "https://twitch.tv/xqc"]}` — accepts channel names or full `twitch.tv` URLs (deduplicated). Response includes a `streams` array.
+- `Twitch enrichment:` when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are set (they are in `.env` but intentionally absent from the Docker build), published stream IDs are resolved against the Twitch Helix API using the app client-credentials flow. Each stream gains `channel_name`, `title`, `game_name`, `thumbnail_url`, `viewer_count`, and `is_live`; IDs that do not match an existing channel are rejected with `400`. If Twitch is unreachable at publish time, the service degrades to storing plain IDs. With no credentials, plain IDs are stored as-is.
 - `GET /health`
 - `POST /v1/watch` — publish the streams you are currently watching
 - `DELETE /v1/watch` — stop watching (clears your published watch state)
@@ -132,4 +134,4 @@ The UI authenticates with the `X-User-ID` header. In real deployments that trust
 
 ## Notes
 
-This first version uses an in-memory repository. It is intentionally simple so the core watch-sharing behavior is easy to test before adding persistence or real OAuth integration.
+The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. Sessions are currently held in an in-memory store, so a restart logs everyone out; a multi-instance deployment needs a shared session store.

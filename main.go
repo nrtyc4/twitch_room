@@ -21,6 +21,7 @@ import (
 	"twitch_room/internal/secrets"
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
+	"twitch_room/internal/twitchapi"
 )
 
 type watchRequest struct {
@@ -115,6 +116,15 @@ func main() {
 
 	repo := repository.NewServiceAdapter(store)
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
+
+	// Enrich published streams with Twitch metadata when app credentials exist
+	// (the local .env carries them; the docker-compose build intentionally does
+	// not, so the container publishes plain logins).
+	if sec.TwitchClientID != "" && sec.TwitchClientSecret != "" {
+		enricher := twitchapi.NewClient(sec.TwitchClientID, sec.TwitchClientSecret)
+		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher)
+		log.Printf("Twitch enrichment enabled")
+	}
 
 	// Create identity provider with Twitch OAuth configuration.
 	// NewTwitchProvider sets up the pooled HTTP client used for the token
@@ -240,6 +250,10 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidStream) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one valid stream ID is required"})
+			return
+		}
+		if errors.Is(err, service.ErrStreamNotFound) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "one or more stream IDs do not correspond to an existing Twitch channel"})
 			return
 		}
 		if errors.Is(err, service.ErrInvalidUser) {

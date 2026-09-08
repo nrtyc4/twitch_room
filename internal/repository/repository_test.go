@@ -11,7 +11,7 @@ func TestMemoryStoreUpsertAndGet(t *testing.T) {
 	store := NewMemoryStore()
 	updatedAt := time.Now().UTC()
 
-	state, err := store.Upsert("user-1", []string{"stream-1", "stream-2"}, updatedAt)
+	state, err := store.Upsert("user-1", []service.Stream{{ID: "stream-1"}, {ID: "stream-2"}}, updatedAt)
 	if err != nil {
 		t.Fatalf("Upsert returned error: %v", err)
 	}
@@ -26,18 +26,21 @@ func TestMemoryStoreUpsertAndGet(t *testing.T) {
 	if len(got.StreamIDs) != 2 {
 		t.Fatalf("expected 2 streams, got %d", len(got.StreamIDs))
 	}
+	if len(got.Streams) != 2 {
+		t.Fatalf("expected 2 enriched streams, got %d", len(got.Streams))
+	}
 }
 
 func TestMemoryStoreList(t *testing.T) {
 	store := NewMemoryStore()
 	// Upsert user-1 and check for success/failure
-	_, err1 := store.Upsert("user-1", []string{"stream-1"}, time.Now().UTC())
+	_, err1 := store.Upsert("user-1", []service.Stream{{ID: "stream-1"}}, time.Now().UTC())
 	if err1 != nil {
 		t.Fatalf("expected user-1 to be upserted: %v", err1)
 	}
 
 	// Upsert user-2 and check for success/failure
-	_, err2 := store.Upsert("user-2", []string{"stream-2"}, time.Now().UTC())
+	_, err2 := store.Upsert("user-2", []service.Stream{{ID: "stream-2"}}, time.Now().UTC())
 	if err2 != nil {
 		t.Fatalf("expected user-2 to be upserted: %v", err2)
 	}

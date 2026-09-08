@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"errors"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ var (
 	ErrUserNotFound          = errors.New("user not found")
 	ErrInvalidUser           = errors.New("invalid user")
 	ErrInvalidStream         = errors.New("invalid stream id")
+	ErrStreamNotFound        = errors.New("stream not found")
 	ErrInvalidSubscription   = errors.New("invalid subscription")
 	ErrCannotSubscribeToSelf = errors.New("cannot subscribe to yourself")
 	ErrNotSubscribed         = errors.New("not subscribed")
@@ -60,15 +63,20 @@ const (
 )
 
 type Stream struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title,omitempty"`
-	ChannelName string    `json:"channel_name,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	ChannelName  string    `json:"channel_name,omitempty"`
+	Title        string    `json:"title,omitempty"`
+	GameName     string    `json:"game_name,omitempty"`
+	ThumbnailURL string    `json:"thumbnail_url,omitempty"`
+	ViewerCount  int       `json:"viewer_count,omitempty"`
+	IsLive       bool      `json:"is_live,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type UserWatchState struct {
 	UserID    string    `json:"user_id"`
 	StreamIDs []string  `json:"stream_ids"`
+	Streams   []Stream  `json:"streams,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -79,8 +87,25 @@ type FeedEntry struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// StreamInfo describes what the Twitch API knows about a channel.
+type StreamInfo struct {
+	Exists       bool
+	IsLive       bool
+	ChannelName  string
+	Title        string
+	GameName     string
+	ThumbnailURL string
+	ViewerCount  int
+}
+
+// StreamEnricher resolves channel logins against an external source (Twitch)
+// so published watch state can carry titles, games, and thumbnails.
+type StreamEnricher interface {
+	LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error)
+}
+
 type Repository interface {
-	UpsertUserWatchState(userID string, streamIDs []string, updatedAt time.Time) (UserWatchState, error)
+	UpsertUserWatchState(userID string, streams []Stream, updatedAt time.Time) (UserWatchState, error)
 	GetUserWatchState(userID string) (UserWatchState, bool)
 	ListActiveUsers(limit int) []UserWatchState
 	DeleteUserWatchState(userID string)
@@ -100,6 +125,7 @@ type Service struct {
 	mu        sync.RWMutex
 	repo      Repository
 	actionTTL time.Duration
+	enricher  StreamEnricher
 }
 
 func NewService(repo Repository, actionTTL time.Duration) *Service {
@@ -113,6 +139,12 @@ func NewService(repo Repository, actionTTL time.Duration) *Service {
 	}
 }
 
+func NewServiceWithEnricher(repo Repository, actionTTL time.Duration, enricher StreamEnricher) *Service {
+	svc := NewService(repo, actionTTL)
+	svc.enricher = enricher
+	return svc
+}
+
 func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatchState, error) {
 	if userID == "" {
 		return UserWatchState{}, ErrInvalidUser
@@ -124,12 +156,65 @@ func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatc
 	}
 
 	now := time.Now().UTC()
-	state, err := s.repo.UpsertUserWatchState(userID, cleaned, now)
+	streams, err := s.resolveStreams(cleaned, now)
+	if err != nil {
+		return UserWatchState{}, err
+	}
+
+	state, err := s.repo.UpsertUserWatchState(userID, streams, now)
 	if err != nil {
 		return UserWatchState{}, err
 	}
 
 	return state, nil
+}
+
+// resolveStreams attaches Twitch metadata to the normalized logins. When no
+// enricher is configured the logins are stored as-is. When the enricher is
+// available, logins that do not resolve to an existing Twitch channel are
+// rejected and lookup failures degrade gracefully to plain logins.
+func (s *Service) resolveStreams(logins []string, now time.Time) ([]Stream, error) {
+	if s.enricher == nil {
+		streams := make([]Stream, 0, len(logins))
+		for _, id := range logins {
+			streams = append(streams, Stream{ID: id, UpdatedAt: now})
+		}
+		return streams, nil
+	}
+
+	info, err := s.enricher.LookupStreams(context.Background(), logins)
+	if err != nil {
+		// Twitch is unreachable: publish plain logins rather than failing the user.
+		streams := make([]Stream, 0, len(logins))
+		for _, id := range logins {
+			streams = append(streams, Stream{ID: id, UpdatedAt: now})
+		}
+		return streams, nil
+	}
+
+	streams := make([]Stream, 0, len(logins))
+	var missing []string
+	for _, id := range logins {
+		si, ok := info[id]
+		if !ok || !si.Exists {
+			missing = append(missing, id)
+			continue
+		}
+		streams = append(streams, Stream{
+			ID:           id,
+			ChannelName:  si.ChannelName,
+			Title:        si.Title,
+			GameName:     si.GameName,
+			ThumbnailURL: si.ThumbnailURL,
+			ViewerCount:  si.ViewerCount,
+			IsLive:       si.IsLive,
+			UpdatedAt:    now,
+		})
+	}
+	if len(missing) > 0 {
+		return nil, ErrStreamNotFound
+	}
+	return streams, nil
 }
 
 func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
@@ -184,12 +269,14 @@ func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 			continue
 		}
 
-		streams := make([]Stream, 0, len(state.StreamIDs))
-		for _, streamID := range state.StreamIDs {
-			streams = append(streams, Stream{
-				ID:        streamID,
-				UpdatedAt: state.UpdatedAt,
-			})
+		streams := state.Streams
+		if len(streams) == 0 {
+			for _, streamID := range state.StreamIDs {
+				streams = append(streams, Stream{
+					ID:        streamID,
+					UpdatedAt: state.UpdatedAt,
+				})
+			}
 		}
 
 		entries = append(entries, FeedEntry{
@@ -377,11 +464,28 @@ func (s *Service) isExpired(updatedAt time.Time) bool {
 	return time.Since(updatedAt) > s.actionTTL
 }
 
+func streamIDsFromStreams(streams []Stream) []string {
+	if len(streams) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(streams))
+	for _, st := range streams {
+		ids = append(ids, st.ID)
+	}
+	return ids
+}
+
 func normalizeStreamIDs(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
 	cleaned := make([]string, 0, len(ids))
 	for _, id := range ids {
-		trimmed := strings.TrimSpace(id)
+		trimmed := strings.ToLower(strings.TrimSpace(id))
+		if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+			parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+			if len(parts) > 0 {
+				trimmed = strings.ToLower(strings.TrimSpace(parts[0]))
+			}
+		}
 		if trimmed == "" {
 			continue
 		}

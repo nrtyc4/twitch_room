@@ -119,7 +119,24 @@ function loadWatchInputFromState(state) {
 function renderStreams(streams) {
   if (!streams || streams.length === 0) return "";
   return `<div class="streams">${streams
-    .map((s) => `<div class="stream">${escapeHtml(s.id || s)}</div>`)
+    .map((s) => {
+      const name = s.channel_name || s.id || "unknown";
+      const thumb = s.thumbnail_url
+        ? `<img class="thumb" src="${escapeHtml(s.thumbnail_url)}" alt="" loading="lazy" />`
+        : `<div class="thumb placeholder"></div>`;
+      const live = s.is_live
+        ? `<span class="badge live">LIVE${s.viewer_count ? " \u00b7 " + s.viewer_count : ""}</span>`
+        : `<span class="badge off">offline</span>`;
+      return `
+        <div class="stream">
+          ${thumb}
+          <div class="info">
+            <div class="name">${escapeHtml(name)} ${live}</div>
+            ${s.title ? `<div class="stream-title">${escapeHtml(s.title)}</div>` : ""}
+            ${s.game_name ? `<div class="meta">${escapeHtml(s.game_name)}</div>` : ""}
+          </div>
+        </div>`;
+    })
     .join("")}</div>`;
 }
 

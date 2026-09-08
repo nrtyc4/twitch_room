@@ -94,9 +94,16 @@ h2 { margin-top: 0; }
 .card .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .card .user { font-weight: 600; }
 .card .meta { color: var(--muted); font-size: 12px; }
-.streams { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
-.stream { font-size: 13px; color: #d0d0d8; }
-.stream::before { content: "\25B6"; color: var(--accent-2); margin-right: 6px; }
+.streams { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.stream { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: #d0d0d8; }
+.stream .thumb { width: 160px; height: 90px; object-fit: cover; border-radius: 6px; background: var(--panel); flex-shrink: 0; }
+.stream .thumb.placeholder { background: linear-gradient(135deg, #1f1f26, #15151a); }
+.stream .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stream .name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.stream-title { color: #e9e9f0; }
+.stream .meta { color: var(--muted); font-size: 12px; }
+.badge.live { background: rgba(255,0,0,.2); color: #ff4d4d; }
+.badge.off { background: rgba(255,255,255,.06); color: var(--muted); }
 .empty { color: var(--muted); padding: 12px 0; }
 
 .box {

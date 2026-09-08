@@ -1,9 +1,27 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
+
+type fakeEnricher struct {
+	info map[string]StreamInfo
+	err  error
+}
+
+func (f *fakeEnricher) LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[string]StreamInfo, len(logins))
+	for _, login := range logins {
+		out[login] = f.info[login]
+	}
+	return out, nil
+}
 
 func TestSetUserWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
@@ -333,5 +351,123 @@ func TestExpiredStateIsRemoved(t *testing.T) {
 	_, err := svc.GetUserWatchState("user-4")
 	if err != ErrUserNotFound {
 		t.Fatalf("expected ErrUserNotFound for expired state, got %v", err)
+	}
+}
+
+func TestSetUserWatchStateEnriches(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "great content", GameName: "Chess", ThumbnailURL: "https://thumb", ViewerCount: 7},
+			"stream-2": {Exists: true, IsLive: false, ChannelName: "Stream Two"},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	state, err := svc.SetUserWatchState("user-1", []string{"stream-1", "stream-2"})
+	if err != nil {
+		t.Fatalf("SetUserWatchState returned error: %v", err)
+	}
+
+	if len(state.Streams) != 2 {
+		t.Fatalf("expected 2 enriched streams, got %d", len(state.Streams))
+	}
+	byID := map[string]Stream{}
+	for _, st := range state.Streams {
+		byID[st.ID] = st
+	}
+
+	s1 := byID["stream-1"]
+	if !s1.IsLive || s1.Title != "great content" || s1.GameName != "Chess" || s1.ViewerCount != 7 {
+		t.Fatalf("unexpected enriched stream-1: %+v", s1)
+	}
+	if s1.ThumbnailURL != "https://thumb" {
+		t.Fatalf("unexpected thumbnail: %q", s1.ThumbnailURL)
+	}
+
+	s2 := byID["stream-2"]
+	if s2.IsLive || s2.ChannelName != "Stream Two" {
+		t.Fatalf("unexpected enriched stream-2: %+v", s2)
+	}
+
+	if len(state.StreamIDs) != 2 {
+		t.Fatalf("expected stream_ids populated too, got %v", state.StreamIDs)
+	}
+}
+
+func TestSetUserWatchStateRejectsUnknownChannel(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, ChannelName: "Stream One"},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	_, err := svc.SetUserWatchState("user-1", []string{"stream-1", "does-not-exist"})
+	if !errors.Is(err, ErrStreamNotFound) {
+		t.Fatalf("expected ErrStreamNotFound, got %v", err)
+	}
+
+	if _, ok := repo.GetUserWatchState("user-1"); ok {
+		t.Fatal("expected watch state to not be stored on rejection")
+	}
+}
+
+func TestSetUserWatchStateDegradesOnEnricherError(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{err: errors.New("twitch down")}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	state, err := svc.SetUserWatchState("user-1", []string{"stream-1"})
+	if err != nil {
+		t.Fatalf("expected graceful fallback, got error: %v", err)
+	}
+
+	if len(state.Streams) != 1 || state.Streams[0].ID != "stream-1" {
+		t.Fatalf("unexpected fallback state: %+v", state)
+	}
+	if state.Streams[0].IsLive {
+		t.Fatal("expected no live metadata on fallback")
+	}
+}
+
+func TestListFeedUsesEnrichedStreams(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "title-1", GameName: "GameX", ViewerCount: 3},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	_, _ = svc.SetUserWatchState("user-1", []string{"stream-1"})
+	if _, err := svc.Subscribe("viewer", "user-1"); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	feed := svc.ListFeed("viewer", 10)
+	if len(feed) != 1 {
+		t.Fatalf("expected 1 feed entry, got %d", len(feed))
+	}
+	entry := feed[0]
+	if len(entry.Streams) != 1 {
+		t.Fatalf("expected 1 stream in feed entry, got %d", len(entry.Streams))
+	}
+	if entry.Streams[0].Title != "title-1" || entry.Streams[0].GameName != "GameX" {
+		t.Fatalf("unexpected enriched feed stream: %+v", entry.Streams[0])
+	}
+}
+
+func TestNormalizeStreamIDs(t *testing.T) {
+	got := normalizeStreamIDs([]string{"Shroud", "shroud", "  ", "https://twitch.tv/xqc", "xqc", "https://www.twitch.tv/lirik"})
+	expected := []string{"shroud", "xqc", "lirik"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Fatalf("expected %v, got %v", expected, got)
+		}
 	}
 }

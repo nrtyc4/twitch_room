@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -50,6 +51,7 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 	CREATE TABLE IF NOT EXISTS user_watch_state (
 		user_id TEXT PRIMARY KEY,
 		stream_ids TEXT[] NOT NULL DEFAULT '{}',
+		streams JSONB NOT NULL DEFAULT '[]'::jsonb,
 		updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
 		created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -70,51 +72,60 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher_id, status);
 	CREATE INDEX IF NOT EXISTS idx_subscriptions_subscriber ON subscriptions(subscriber_id);
+
+	ALTER TABLE user_watch_state ADD COLUMN IF NOT EXISTS streams JSONB;
 	`
 
-	_, err := ps.db.ExecContext(ctx, schema)
+	if _, err := ps.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	_, err := ps.db.ExecContext(ctx, `UPDATE user_watch_state SET streams = '[]'::jsonb WHERE streams IS NULL`)
 	return err
 }
 
 // Upsert inserts or updates a user's watch state.
-func (ps *PostgresStore) Upsert(userID string, streamIDs []string, updatedAt time.Time) (service.UserWatchState, error) {
+func (ps *PostgresStore) Upsert(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error) {
+	payload, err := json.Marshal(streams)
+	if err != nil {
+		return service.UserWatchState{}, fmt.Errorf("marshal streams: %w", err)
+	}
+
 	query := `
-	INSERT INTO user_watch_state (user_id, stream_ids, updated_at)
-	VALUES ($1, $2, $3)
+	INSERT INTO user_watch_state (user_id, stream_ids, streams, updated_at)
+	VALUES ($1, $2, $3, $4)
 	ON CONFLICT (user_id) DO UPDATE SET
 		stream_ids = EXCLUDED.stream_ids,
+		streams = EXCLUDED.streams,
 		updated_at = EXCLUDED.updated_at
-	RETURNING user_id, stream_ids, updated_at
+	RETURNING user_id, stream_ids, streams, updated_at
 	`
 
 	var userIDResult string
 	var streamIDsResult pq.StringArray
+	var streamsResult []byte
 	var updatedAtResult time.Time
 
-	err := ps.db.QueryRow(query, userID, pq.Array(streamIDs), updatedAt).
-		Scan(&userIDResult, &streamIDsResult, &updatedAtResult)
+	err = ps.db.QueryRow(query, userID, pq.Array(streamIDs(streams)), payload, updatedAt).
+		Scan(&userIDResult, &streamIDsResult, &streamsResult, &updatedAtResult)
 
 	if err != nil {
 		return service.UserWatchState{}, fmt.Errorf("upsert failed: %w", err)
 	}
 
-	return service.UserWatchState{
-		UserID:    userIDResult,
-		StreamIDs: []string(streamIDsResult),
-		UpdatedAt: updatedAtResult,
-	}, nil
+	return buildWatchState(userIDResult, streamIDsResult, streamsResult, updatedAtResult), nil
 }
 
 // Get retrieves a user's watch state by ID.
 func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
-	query := `SELECT user_id, stream_ids, updated_at FROM user_watch_state WHERE user_id = $1`
+	query := `SELECT user_id, stream_ids, streams, updated_at FROM user_watch_state WHERE user_id = $1`
 
 	var userIDResult string
 	var streamIDsResult pq.StringArray
+	var streamsResult []byte
 	var updatedAtResult time.Time
 
 	err := ps.db.QueryRow(query, userID).
-		Scan(&userIDResult, &streamIDsResult, &updatedAtResult)
+		Scan(&userIDResult, &streamIDsResult, &streamsResult, &updatedAtResult)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -124,11 +135,7 @@ func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
 		return service.UserWatchState{}, false
 	}
 
-	return service.UserWatchState{
-		UserID:    userIDResult,
-		StreamIDs: []string(streamIDsResult),
-		UpdatedAt: updatedAtResult,
-	}, true
+	return buildWatchState(userIDResult, streamIDsResult, streamsResult, updatedAtResult), true
 }
 
 // List retrieves the most recent user watch states up to the limit.
@@ -138,7 +145,7 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 	}
 
 	query := `
-	SELECT user_id, stream_ids, updated_at
+	SELECT user_id, stream_ids, streams, updated_at
 	FROM user_watch_state
 	ORDER BY updated_at DESC
 	LIMIT $1
@@ -154,20 +161,41 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 	for rows.Next() {
 		var userID string
 		var streamIDsResult pq.StringArray
+		var streamsResult []byte
 		var updatedAt time.Time
 
-		if err := rows.Scan(&userID, &streamIDsResult, &updatedAt); err != nil {
+		if err := rows.Scan(&userID, &streamIDsResult, &streamsResult, &updatedAt); err != nil {
 			continue
 		}
 
-		states = append(states, service.UserWatchState{
-			UserID:    userID,
-			StreamIDs: []string(streamIDsResult),
-			UpdatedAt: updatedAt,
-		})
+		states = append(states, buildWatchState(userID, streamIDsResult, streamsResult, updatedAt))
 	}
 
 	return states
+}
+
+// buildWatchState reconstructs a watch state from Postgres columns, falling
+// back to the plain stream_ids when the enriched streams column is empty
+// (rows written before the streams column existed).
+func buildWatchState(userID string, streamIDsResult pq.StringArray, streamsResult []byte, updatedAt time.Time) service.UserWatchState {
+	state := service.UserWatchState{
+		UserID:    userID,
+		StreamIDs: []string(streamIDsResult),
+		UpdatedAt: updatedAt,
+	}
+
+	var streams []service.Stream
+	if len(streamsResult) > 0 {
+		if err := json.Unmarshal(streamsResult, &streams); err == nil {
+			state.Streams = streams
+		}
+	}
+	if len(state.Streams) == 0 {
+		for _, id := range state.StreamIDs {
+			state.Streams = append(state.Streams, service.Stream{ID: id, UpdatedAt: updatedAt})
+		}
+	}
+	return state
 }
 
 // Delete removes a user's watch state.

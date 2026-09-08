@@ -8,7 +8,7 @@ import (
 )
 
 type WatchStateStore interface {
-	Upsert(userID string, streamIDs []string, updatedAt time.Time) (service.UserWatchState, error)
+	Upsert(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error)
 	Get(userID string) (service.UserWatchState, bool)
 	List(limit int) []service.UserWatchState
 	Delete(userID string)
@@ -47,17 +47,36 @@ func subscriptionKey(subscriberID, publisherID string) string {
 	return subscriberID + "\x00" + publisherID
 }
 
+func cloneStreams(streams []service.Stream) []service.Stream {
+	if len(streams) == 0 {
+		return nil
+	}
+	return append([]service.Stream(nil), streams...)
+}
+
+func streamIDs(streams []service.Stream) []string {
+	if len(streams) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(streams))
+	for _, s := range streams {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
 func NewServiceAdapter(store WatchStateStore) *ServiceAdapter {
 	return &ServiceAdapter{store: store}
 }
 
-func (s *MemoryStore) Upsert(userID string, streamIDs []string, updatedAt time.Time) (service.UserWatchState, error) {
+func (s *MemoryStore) Upsert(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	state := service.UserWatchState{
 		UserID:    userID,
-		StreamIDs: append([]string(nil), streamIDs...),
+		StreamIDs: streamIDs(streams),
+		Streams:   cloneStreams(streams),
 		UpdatedAt: updatedAt,
 	}
 	s.items[userID] = state
@@ -75,6 +94,7 @@ func (s *MemoryStore) Get(userID string) (service.UserWatchState, bool) {
 	return service.UserWatchState{
 		UserID:    state.UserID,
 		StreamIDs: append([]string(nil), state.StreamIDs...),
+		Streams:   cloneStreams(state.Streams),
 		UpdatedAt: state.UpdatedAt,
 	}, true
 }
@@ -92,6 +112,7 @@ func (s *MemoryStore) List(limit int) []service.UserWatchState {
 		states = append(states, service.UserWatchState{
 			UserID:    state.UserID,
 			StreamIDs: append([]string(nil), state.StreamIDs...),
+			Streams:   cloneStreams(state.Streams),
 			UpdatedAt: state.UpdatedAt,
 		})
 	}
@@ -180,8 +201,8 @@ func (s *MemoryStore) DeleteSubscription(subscriberID, publisherID string) {
 	delete(s.subscriptions, subscriptionKey(subscriberID, publisherID))
 }
 
-func (a *ServiceAdapter) UpsertUserWatchState(userID string, streamIDs []string, updatedAt time.Time) (service.UserWatchState, error) {
-	return a.store.Upsert(userID, streamIDs, updatedAt)
+func (a *ServiceAdapter) UpsertUserWatchState(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error) {
+	return a.store.Upsert(userID, streams, updatedAt)
 }
 
 func (a *ServiceAdapter) GetUserWatchState(userID string) (service.UserWatchState, bool) {
