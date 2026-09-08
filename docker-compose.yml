@@ -1,6 +1,21 @@
-version: "3.9"
-
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: twitch-room-db
+    environment:
+      POSTGRES_USER: twitch_room
+      POSTGRES_PASSWORD: twitch_room
+      POSTGRES_DB: twitch_room
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U twitch_room -d twitch_room"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   twitch-room:
     build:
       context: .
@@ -12,9 +27,17 @@ services:
       PORT: "8080"
       ALLOW_DEV_AUTH: "true"
       TWITCH_ROOM_AUTH_TOKEN: "dev-secret-token"
+      DATABASE_DSN: "postgres://twitch_room:twitch_room@db:5432/twitch_room?sslmode=disable"
+      WATCH_STATE_TTL_MINUTES: "5"
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 10s
+
+volumes:
+  pgdata:
