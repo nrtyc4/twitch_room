@@ -165,6 +165,31 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 		t.Fatalf("expected 2 users in feed, got %d", len(feedResp))
 	}
 
+	// Test 4: User can read their own watch state via /v1/users/{id}/watch
+	reqOwn, _ := http.NewRequest("GET", testServer.URL+"/v1/users/user1/watch", nil)
+	reqOwn.Header.Set("X-User-ID", "user1")
+	respOwn, _ := http.DefaultClient.Do(reqOwn)
+
+	if respOwn.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 reading own watch state, got %d", respOwn.StatusCode)
+	}
+
+	var ownState map[string]interface{}
+	json.NewDecoder(respOwn.Body).Decode(&ownState)
+
+	if ownState["user_id"] != "user1" {
+		t.Fatalf("expected own user_id 'user1', got %v", ownState["user_id"])
+	}
+
+	// Test 5: User cannot read another user's watch state via /v1/users/{id}/watch
+	reqOther, _ := http.NewRequest("GET", testServer.URL+"/v1/users/user2/watch", nil)
+	reqOther.Header.Set("X-User-ID", "user1")
+	respOther, _ := http.DefaultClient.Do(reqOther)
+
+	if respOther.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 reading another user's watch state, got %d", respOther.StatusCode)
+	}
+
 	t.Logf("Watch state integration test passed")
 }
 

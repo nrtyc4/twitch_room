@@ -187,6 +187,7 @@ func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pathUserID := strings.TrimPrefix(r.URL.Path, "/v1/users/")
+	pathUserID = strings.TrimSuffix(pathUserID, "/watch")
 	pathUserID = strings.TrimSpace(pathUserID)
 	if pathUserID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing user id"})
