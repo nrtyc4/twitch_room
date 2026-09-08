@@ -115,13 +115,14 @@ func main() {
 	repo := repository.NewServiceAdapter(store)
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
 
-	// Create identity provider with Twitch OAuth configuration
-	identityProvider := &identity.TwitchProvider{
-		ClientID:      sec.TwitchClientID,
-		ClientSecret:  sec.TwitchClientSecret,
-		RedirectURI:   sec.TwitchRedirectURI,
-		EnableDevAuth: cfg.AllowDevAuth,
-	}
+	// Create identity provider with Twitch OAuth configuration.
+	// NewTwitchProvider sets up the pooled HTTP client used for the token
+	// exchange; override the env-derived knobs with our loaded config.
+	identityProvider := identity.NewTwitchProvider()
+	identityProvider.ClientID = sec.TwitchClientID
+	identityProvider.ClientSecret = sec.TwitchClientSecret
+	identityProvider.RedirectURI = sec.TwitchRedirectURI
+	identityProvider.EnableDevAuth = cfg.AllowDevAuth
 
 	// Create watch state cache with same TTL as service
 	cacheTTL := time.Duration(cfg.WatchStateTTLMin) * time.Minute

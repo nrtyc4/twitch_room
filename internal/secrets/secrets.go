@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -89,7 +90,7 @@ func LoadDotEnv(filePath string) error {
 
 // DotEnvScanner parses .env files line by line
 type DotEnvScanner struct {
-	reader   *os.File
+	scanner  *bufio.Scanner
 	line     string
 	key      string
 	value    string
@@ -99,21 +100,18 @@ type DotEnvScanner struct {
 
 // NewDotEnvScanner creates a new .env file scanner
 func NewDotEnvScanner(file *os.File) *DotEnvScanner {
-	return &DotEnvScanner{reader: file}
+	return &DotEnvScanner{scanner: bufio.NewScanner(file)}
 }
 
 // Scan reads the next line from the .env file
 func (s *DotEnvScanner) Scan() bool {
-	buffer := make([]byte, 4096)
-	n, err := s.reader.Read(buffer)
-	if n > 0 {
-		s.line = string(buffer[:n])
+	if s.scanner.Scan() {
+		s.line = s.scanner.Text()
 		return true
 	}
-	if err != nil {
+	if err := s.scanner.Err(); err != nil {
 		s.hasError = true
 		s.err = err
-		return false
 	}
 	return false
 }

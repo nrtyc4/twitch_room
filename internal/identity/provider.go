@@ -98,6 +98,15 @@ func (p *TwitchProvider) BuildAuthorizeURL(state string, scopes []string) (strin
 	return TwitchAuthorizeURL + "?" + params.Encode(), nil
 }
 
+// httpClientOrDefault returns the provider's HTTP client, or a default client
+// if the provider was constructed without one (e.g. in tests).
+func (p *TwitchProvider) httpClientOrDefault() *http.Client {
+	if p.httpClient != nil {
+		return p.httpClient
+	}
+	return http.DefaultClient
+}
+
 // exchangeCodeForToken performs the OAuth 2.0 authorization code exchange with Twitch.
 func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) (string, error) {
 	if p.ClientID == "" || p.ClientSecret == "" {
@@ -121,7 +130,7 @@ func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) 
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.httpClientOrDefault().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to exchange code for token: %w", err)
 	}
@@ -158,7 +167,7 @@ func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken str
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	req.Header.Set("Client-ID", p.ClientID)
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.httpClientOrDefault().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch user info: %w", err)
 	}

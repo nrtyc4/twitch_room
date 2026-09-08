@@ -107,6 +107,60 @@ func TestSecretsLoad(t *testing.T) {
 	}
 }
 
+func TestLoadDotEnvParsesMultipleLines(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + string(os.PathSeparator) + ".env"
+	content := strings.Join([]string{
+		"# comment line",
+		"",
+		"TWITCH_CLIENT_ID=client-id-123",
+		"TWITCH_CLIENT_SECRET=client-secret-456",
+		"TWITCH_REDIRECT_URI=http://localhost:8080/auth/twitch/callback",
+		"APP_REDIRECT_AFTER_LOGIN=/app",
+	}, "\n")
+
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("failed to write .env file: %v", err)
+	}
+
+	for _, key := range []string{
+		"TWITCH_CLIENT_ID",
+		"TWITCH_CLIENT_SECRET",
+		"TWITCH_REDIRECT_URI",
+		"APP_REDIRECT_AFTER_LOGIN",
+	} {
+		_ = os.Unsetenv(key)
+	}
+
+	defer func() {
+		for _, key := range []string{
+			"TWITCH_CLIENT_ID",
+			"TWITCH_CLIENT_SECRET",
+			"TWITCH_REDIRECT_URI",
+			"APP_REDIRECT_AFTER_LOGIN",
+		} {
+			_ = os.Unsetenv(key)
+		}
+	}()
+
+	if err := LoadDotEnv(path); err != nil {
+		t.Fatalf("expected no error loading .env, got: %v", err)
+	}
+
+	if got := os.Getenv("TWITCH_CLIENT_ID"); got != "client-id-123" {
+		t.Fatalf("expected TWITCH_CLIENT_ID, got %q", got)
+	}
+	if got := os.Getenv("TWITCH_CLIENT_SECRET"); got != "client-secret-456" {
+		t.Fatalf("expected TWITCH_CLIENT_SECRET, got %q", got)
+	}
+	if got := os.Getenv("TWITCH_REDIRECT_URI"); got != "http://localhost:8080/auth/twitch/callback" {
+		t.Fatalf("expected TWITCH_REDIRECT_URI, got %q", got)
+	}
+	if got := os.Getenv("APP_REDIRECT_AFTER_LOGIN"); got != "/app" {
+		t.Fatalf("expected APP_REDIRECT_AFTER_LOGIN, got %q", got)
+	}
+}
+
 func TestSecretsString(t *testing.T) {
 	s := &Secrets{
 		TwitchClientID:     "test-id",
