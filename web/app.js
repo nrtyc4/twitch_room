@@ -238,9 +238,16 @@ async function unfollow(id) {
 async function loadRequests() {
   const requests = await api("GET", "/v1/subscription_requests");
   const el = $("requests");
-  if (requests === null) return;
+  if (requests === null) {
+    renderRequestBadge(0);
+    return;
+  }
+  renderRequestBadge(requests.length);
   if (requests.length === 0) {
-    el.innerHTML = `<div class="empty">No pending requests.</div>`;
+    const mode = $("setting-mode").value;
+    el.innerHTML = mode === "open"
+      ? `<div class="empty">No pending requests. You are in <b>Open</b> mode and follow requests never queue up — switch to <b>Approved</b> in Settings to require approval.</div>`
+      : `<div class="empty">No pending requests.</div>`;
     return;
   }
   el.innerHTML = requests
@@ -250,6 +257,7 @@ async function loadRequests() {
         <div class="head">
           <span class="user">${escapeHtml(req.subscriber_id)} wants to follow you</span>
           <div>
+            <span class="meta">requested ${fmtTime(req.created_at)}</span>
             <button class="danger" data-action="reject" data-id="${escapeHtml(req.subscriber_id)}">Reject</button>
             <button data-action="approve" data-id="${escapeHtml(req.subscriber_id)}">Approve</button>
           </div>
@@ -269,6 +277,17 @@ async function loadRequests() {
       loadRequests();
     });
   });
+}
+
+function renderRequestBadge(count) {
+  const badge = $("request-count");
+  if (count <= 0) {
+    badge.hidden = true;
+    badge.textContent = "";
+    return;
+  }
+  badge.hidden = false;
+  badge.textContent = count > 99 ? "99+" : String(count);
 }
 
 async function loadSettings() {
@@ -344,5 +363,14 @@ async function init() {
   }
 }
 
-setInterval(loadFeed, 15000);
+function hasIdentity() {
+  return Boolean((usingSession && sessionUser) || currentUser);
+}
+
+setInterval(() => {
+  if (hasIdentity()) loadFeed();
+}, 15000);
+setInterval(() => {
+  if (hasIdentity()) loadRequests();
+}, 20000);
 init();
