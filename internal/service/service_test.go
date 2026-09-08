@@ -117,6 +117,52 @@ func TestCanViewRejectsMalformedIDs(t *testing.T) {
 	}
 }
 
+func TestGetPublicWatchState(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, time.Minute)
+
+	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
+
+	// Default visibility is "subscribers", so the state is not public yet.
+	if _, err := svc.GetPublicWatchState("publisher-a"); !errors.Is(err, ErrNotPublic) {
+		t.Fatalf("expected ErrNotPublic for subscriber visibility, got %v", err)
+	}
+
+	// Public visibility exposes the state.
+	if _, err := svc.UpdatePublisherSettings(PublisherSettings{
+		UserID:           "publisher-a",
+		SubscriptionMode: SubscriptionModeOpen,
+		Visibility:       VisibilityPublic,
+	}); err != nil {
+		t.Fatalf("UpdatePublisherSettings: %v", err)
+	}
+	state, err := svc.GetPublicWatchState("publisher-a")
+	if err != nil {
+		t.Fatalf("expected public state, got %v", err)
+	}
+	if len(state.StreamIDs) != 1 || state.StreamIDs[0] != "stream-1" {
+		t.Fatalf("unexpected public state: %+v", state)
+	}
+
+	// Unknown publishers look the same as private ones.
+	if _, err := svc.GetPublicWatchState("stranger"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound for unknown publisher, got %v", err)
+	}
+}
+
+func TestResolveDisplayName(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewServiceWithEnricher(repo, time.Minute, &fakeEnricher{
+		users: map[string]string{"publisher-a": "Best Publisher"},
+	})
+	if got := svc.ResolveDisplayName("publisher-a"); got != "Best Publisher" {
+		t.Fatalf("expected resolved name, got %q", got)
+	}
+	if got := svc.ResolveDisplayName("publisher-b"); got != "publisher-b" {
+		t.Fatalf("expected raw id fallback, got %q", got)
+	}
+}
+
 func TestGetUserWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewService(repo, time.Minute)

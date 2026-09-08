@@ -147,6 +147,10 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 
 All user, publisher, subscriber and stream identifiers are validated at the API boundary (and again in the service layer): they must be 1-100 characters of letters, digits, `_` or `-`. Twitch channel URLs are still accepted in `stream_ids` because they are normalised to the channel login first; anything else is rejected with `400` before it reaches storage or the Twitch API. A single watch state is capped at `50` streams. An `X-User-ID` (or `X-User-ID` obtained via a real Twitch login) that violates the rules is rejected with `401`.
 
+## Public share pages
+
+Every publisher gets a read-only, unauthenticated page at `/u/{user_id}` — no login needed. It renders the publisher's current watch state (channel names, live status, viewer count, title and game when enrichment is enabled) with a thumbnail per stream, and auto-refreshes every two minutes. Only publishers whose watch visibility is set to **Public** get a page; subscriber-only, private, missing and expired states all return `404` so the page does not reveal whether a state exists. The share page is scaffolded per-IP to keep public scraping at bay, and a link to it appears in the app's Settings when a publisher switches visibility to Public.
+
 ## Notes
 
 The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. OAuth session tokens are stored in the database too, so sessions survive a restart and work across multiple instances (memory sessions are used when no database is configured). When Twitch credentials are configured, publisher display names in the feed are resolved from the Twitch users API (cached briefly) and fall back to the raw user ID.

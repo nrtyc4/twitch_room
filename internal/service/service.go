@@ -22,6 +22,7 @@ var (
 	ErrNotSubscribed         = errors.New("not subscribed")
 	ErrNoPendingRequest      = errors.New("no pending subscription request")
 	ErrInvalidSettings       = errors.New("invalid settings")
+	ErrNotPublic             = errors.New("watch state is not public")
 )
 
 // MaxStreamsPerWatch caps the number of streams a single watch state may
@@ -354,6 +355,49 @@ func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
 	}
 
 	return state, nil
+}
+
+// GetPublicWatchState returns a publisher's watch state for anonymous share
+// pages. Only publishers with public visibility are exposed; private or
+// subscriber-only states (and missing or expired states) all surface the same
+// ErrUserNotFound so the public page does not confirm whether a state exists.
+func (s *Service) GetPublicWatchState(publisherID string) (UserWatchState, error) {
+	if err := checkUserID(publisherID); err != nil {
+		return UserWatchState{}, ErrUserNotFound
+	}
+
+	state, ok := s.repo.GetUserWatchState(publisherID)
+	if !ok {
+		return UserWatchState{}, ErrUserNotFound
+	}
+
+	if s.isExpired(state.UpdatedAt) {
+		s.repo.DeleteUserWatchState(publisherID)
+		return UserWatchState{}, ErrUserNotFound
+	}
+
+	settings, ok := s.repo.GetPublisherSettings(publisherID)
+	if !ok {
+		return UserWatchState{}, ErrNotPublic
+	}
+	if settings.Visibility != VisibilityPublic {
+		return UserWatchState{}, ErrNotPublic
+	}
+
+	return state, nil
+}
+
+// ResolveDisplayName resolves a single user ID to its human-readable name via
+// the enricher when available, degrading to the raw ID otherwise.
+func (s *Service) ResolveDisplayName(userID string) string {
+	if resolver, ok := s.enricher.(UserResolver); ok && userID != "" {
+		if names, err := resolver.ResolveUsers(context.Background(), []string{userID}); err == nil {
+			if name, ok := names[strings.ToLower(userID)]; ok && name != "" {
+				return name
+			}
+		}
+	}
+	return userID
 }
 
 func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {

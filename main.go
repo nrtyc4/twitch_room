@@ -45,6 +45,7 @@ type server struct {
 	sessions           *sessionStore
 	redirectAfterLogin string
 	trustedProxyCIDRs  []netip.Prefix
+	shareLimiter       *security.RateLimiter
 }
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
@@ -198,6 +199,7 @@ func main() {
 		identityProvider:   identityProvider,
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		authLimiter:        security.NewRateLimiter(20, time.Minute),
+		shareLimiter:       security.NewRateLimiter(60, time.Minute),
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
 		sessions:           sessions,
@@ -223,6 +225,7 @@ func main() {
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 	mux.HandleFunc("/auth/me", s.handleMe)
 	mux.HandleFunc("/auth/logout", s.handleLogout)
+	mux.HandleFunc("/u/", s.handleSharePage)
 
 	webHandler, err := newWebHandler()
 	if err != nil {

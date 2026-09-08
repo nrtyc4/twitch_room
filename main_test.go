@@ -2,6 +2,7 @@
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -153,6 +154,125 @@ func TestUserPathRejectsMalformedID(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400 for malformed path user id, got %d", resp.StatusCode)
+	}
+}
+
+func truncate(s string) string {
+	if len(s) > 400 {
+		return s[:400] + "..."
+	}
+	return s
+}
+
+// fakeShareEnricher enriches streams and resolves every user to a friendly
+// display name so share-page rendering can be exercised offline.
+type fakeShareEnricher struct{}
+
+func (f *fakeShareEnricher) LookupStreams(ctx context.Context, logins []string) (map[string]service.StreamInfo, error) {
+	out := make(map[string]service.StreamInfo, len(logins))
+	for _, l := range logins {
+		out[l] = service.StreamInfo{
+			Exists:       true,
+			IsLive:       true,
+			ChannelName:  "live channel",
+			Title:        "very stream",
+			GameName:     "Chess",
+			ThumbnailURL: "https://thumb",
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeShareEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
+	out := make(map[string]string, len(userIDs))
+	for _, id := range userIDs {
+		out[strings.ToLower(id)] = "Best Publisher"
+	}
+	return out, nil
+}
+
+func newShareServer() (*server, *httptest.Server) {
+	svc := service.NewServiceWithEnricher(
+		service.NewMemoryRepository(),
+		time.Minute,
+		&fakeShareEnricher{},
+	)
+	s := &server{
+		watchService:   svc,
+		authMiddleware: &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+		shareLimiter:   security.NewRateLimiter(100, time.Minute),
+	}
+
+	_, _ = svc.SetUserWatchState("shroud", []string{"xqc"})
+	_, _ = svc.SetUserWatchState("private-user", []string{"xqc"})
+	_, _ = svc.UpdatePublisherSettings(service.PublisherSettings{
+		UserID:           "shroud",
+		SubscriptionMode: service.SubscriptionModeOpen,
+		Visibility:       service.VisibilityPublic,
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/u/", s.handleSharePage)
+	testServer := httptest.NewServer(mux)
+	return s, testServer
+}
+
+func TestSharePageRendersPublicState(t *testing.T) {
+	_, ts := newShareServer()
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/u/shroud")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body := new(bytes.Buffer)
+	_, _ = body.ReadFrom(resp.Body)
+	out := body.String()
+	if !strings.Contains(out, "Best Publisher") {
+		t.Errorf("expected resolved display name in page, got:\n%s", truncate(out))
+	}
+	if !strings.Contains(out, "xqc") {
+		t.Errorf("expected stream id in page, got:\n%s", truncate(out))
+	}
+	if !strings.Contains(out, "live channel") {
+		t.Errorf("expected enriched value in page, got:\n%s", truncate(out))
+	}
+}
+
+func TestSharePageHidesNonPublicAndMissing(t *testing.T) {
+	_, ts := newShareServer()
+	defer ts.Close()
+
+	for _, path := range []string{"/u/private-user", "/u/stranger", "/u/bad~id"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: expected 404, got %d", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestSharePageRejectsNonGet(t *testing.T) {
+	_, ts := newShareServer()
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/u/shroud", "application/json", nil)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", resp.StatusCode)
 	}
 }
 

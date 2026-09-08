@@ -295,6 +295,13 @@ async function loadSettings() {
   if (settings === null) return;
   $("setting-mode").value = settings.subscription_mode || "open";
   $("setting-visibility").value = settings.visibility || "subscribers";
+  const me = (usingSession && sessionUser) || currentUser;
+  const visible = settings.visibility === "public" && Boolean(me);
+  $("share-link-wrap").hidden = !visible;
+  if (visible) {
+    $("share-link").textContent = "/u/" + encodeURIComponent(me);
+    $("share-link").href = "/u/" + encodeURIComponent(me);
+  }
 }
 
 async function saveSettings() {
@@ -305,6 +312,7 @@ async function saveSettings() {
   const saved = await api("PUT", "/v1/settings", settings);
   if (saved) {
     $("settings-status").textContent = `Saved: ${saved.subscription_mode} / ${saved.visibility}`;
+    loadSettings();
   }
 }
 
