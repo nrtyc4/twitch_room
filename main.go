@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	"twitch_room/internal/auth"
 	"twitch_room/internal/config"
 	"twitch_room/internal/identity"
+	"twitch_room/internal/metrics"
 	"twitch_room/internal/performance"
 	"twitch_room/internal/repository"
 	"twitch_room/internal/secrets"
@@ -46,6 +48,7 @@ type server struct {
 	redirectAfterLogin string
 	trustedProxyCIDRs  []netip.Prefix
 	shareLimiter       *security.RateLimiter
+	metrics            *metrics.Registry
 }
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
@@ -205,6 +208,7 @@ func main() {
 		sessions:           sessions,
 		redirectAfterLogin: cfg.RedirectAfterLogin,
 		trustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
+		metrics:            metrics.New(),
 	}
 
 	if cfg.SecureCookies {
@@ -213,6 +217,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	mux.HandleFunc("/v1/watch", s.handleWatch)
 	mux.HandleFunc("/v1/users/", s.handleUserWatch)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
@@ -236,7 +241,7 @@ func main() {
 	log.Printf("twitch-room service starting on :%s", cfg.Port)
 
 	// Middleware chain: HTTPS enforcement (when TLS is on), security headers,
-	// response logging, and a global cap on request bodies.
+	// response logging, request metrics, and a global cap on request bodies.
 	var handler http.Handler = withLogging(mux)
 	handler = security.MaxBodyBytes(1 << 20)(handler)
 	handler = security.SecurityHeaders(cfg.TLSEnabled)(handler)
@@ -245,6 +250,7 @@ func main() {
 		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
 		handler = security.ForceHTTPS(cfg.AllowedHosts, isHTTPS)(handler)
 	}
+	handler = s.metricsMiddleware(handler)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -345,6 +351,7 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.rateLimiter.Allow(userID) {
+		s.incThrottled("watch_per_user")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
@@ -480,6 +487,7 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.rateLimiter.Allow(userID) {
+		s.incThrottled("feed_per_user")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
@@ -793,6 +801,7 @@ func (s *server) trustedRequest(r *http.Request) bool {
 // they are throttled independently of per-user API limits.
 func (s *server) rateLimitByIP(w http.ResponseWriter, r *http.Request) bool {
 	if s.authLimiter != nil && !s.authLimiter.Allow(security.ClientIP(r, s.trustedRequest(r))) {
+		s.incThrottled("auth_ip")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return false
 	}
@@ -836,6 +845,93 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 	}
 
 	return "", false
+}
+
+// handleMetrics renders Prometheus text metrics for scrapers. Aggregate
+// gauges are refreshed from the repository on each scrape. When a static
+// bearer token is configured, scrapers must present it.
+func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authMiddleware.Authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.metrics == nil || s.watchService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metrics unavailable"})
+		return
+	}
+
+	snap := s.watchService.MetricsSnapshot()
+	s.metrics.GaugeSet("twitch_room_active_watch_states", "Publishers with a non-expired watch state.", float64(snap.ActiveWatchStates), nil)
+	for status, count := range snap.SubscriptionsByStatus {
+		s.metrics.GaugeSet("twitch_room_subscriptions", "Subscriptions by status.", float64(count), metrics.LabelSet{"status": string(status)})
+	}
+	s.metrics.GaugeSet("twitch_room_app_info", "Build information.", 1, metrics.LabelSet{"version": "dev"})
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(s.metrics.Prometheus())
+}
+
+// metricsMiddleware records request counts, status codes and durations.
+// Route labels are bucketed to the first path segment to keep the label
+// space small even under heavy user-id traffic.
+func (s *server) metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.metrics == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		labels := metrics.LabelSet{
+			"method": r.Method,
+			"code":   strconv.Itoa(rec.code),
+			"route":  routeKey(r.URL.Path),
+		}
+		s.metrics.CounterInc("twitch_room_http_requests_total", "Number of HTTP requests.", labels)
+		s.metrics.HistogramObserve("twitch_room_http_request_duration_seconds", "HTTP request duration in seconds.", time.Since(start).Seconds(), metrics.LabelSet{"route": labels["route"]}, nil)
+	})
+}
+
+// incThrottled bumps the rate-limit rejection counter for a given reason.
+func (s *server) incThrottled(reason string) {
+	if s.metrics != nil {
+		s.metrics.CounterInc("twitch_room_throttled_requests_total", "Requests rejected by a rate limiter.", metrics.LabelSet{"reason": reason})
+	}
+}
+
+// statusRecorder captures the response status code written by the handler.
+type statusRecorder struct {
+	http.ResponseWriter
+	code int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.code = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// routeKey collapses a request path into a coarse label so per-user paths do
+// not explode the metrics label space.
+func routeKey(path string) string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return "root"
+	}
+	parts := strings.Split(trimmed, "/")
+	if parts[0] == "v1" {
+		if len(parts) > 1 {
+			return "v1/" + parts[1]
+		}
+		return "v1"
+	}
+	return parts[0]
 }
 
 func withLogging(next http.Handler) http.Handler {

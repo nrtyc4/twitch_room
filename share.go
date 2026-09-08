@@ -42,6 +42,7 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.shareLimiter != nil && !s.shareLimiter.Allow(security.ClientIP(r, s.trustedRequest(r))) {
+		s.incThrottled("share_ip")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}

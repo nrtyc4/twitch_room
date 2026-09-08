@@ -12,6 +12,7 @@ type WatchStateStore interface {
 	Get(userID string) (service.UserWatchState, bool)
 	List(limit int) []service.UserWatchState
 	Delete(userID string)
+	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings service.PublisherSettings) error
 	GetPublisherSettings(userID string) (service.PublisherSettings, bool)
@@ -22,6 +23,7 @@ type WatchStateStore interface {
 	ListSubscriptionsForPublisher(publisherID string, status service.SubscriptionStatus) []service.Subscription
 	SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error
 	DeleteSubscription(subscriberID, publisherID string)
+	CountSubscriptionsByStatus() map[service.SubscriptionStatus]int
 }
 
 type MemoryStore struct {
@@ -128,6 +130,21 @@ func (s *MemoryStore) Delete(userID string) {
 	delete(s.items, userID)
 }
 
+// CountActiveWatchStates returns the number of stored states last updated at
+// or after the given time, mirroring how the service treats non-expired ones.
+func (s *MemoryStore) CountActiveWatchStates(updatedAfter time.Time) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	for _, state := range s.items {
+		if !state.UpdatedAt.Before(updatedAfter) {
+			count++
+		}
+	}
+	return count
+}
+
 func (s *MemoryStore) SetPublisherSettings(settings service.PublisherSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -201,6 +218,18 @@ func (s *MemoryStore) DeleteSubscription(subscriberID, publisherID string) {
 	delete(s.subscriptions, subscriptionKey(subscriberID, publisherID))
 }
 
+// CountSubscriptionsByStatus tallies every stored subscription by status.
+func (s *MemoryStore) CountSubscriptionsByStatus() map[service.SubscriptionStatus]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	counts := make(map[service.SubscriptionStatus]int)
+	for _, sub := range s.subscriptions {
+		counts[sub.Status]++
+	}
+	return counts
+}
+
 func (a *ServiceAdapter) UpsertUserWatchState(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error) {
 	return a.store.Upsert(userID, streams, updatedAt)
 }
@@ -215,6 +244,10 @@ func (a *ServiceAdapter) ListActiveUsers(limit int) []service.UserWatchState {
 
 func (a *ServiceAdapter) DeleteUserWatchState(userID string) {
 	a.store.Delete(userID)
+}
+
+func (a *ServiceAdapter) CountActiveWatchStates(updatedAfter time.Time) int {
+	return a.store.CountActiveWatchStates(updatedAfter)
 }
 
 func (a *ServiceAdapter) SetPublisherSettings(settings service.PublisherSettings) error {
@@ -247,4 +280,8 @@ func (a *ServiceAdapter) SetSubscriptionStatus(subscriberID, publisherID string,
 
 func (a *ServiceAdapter) DeleteSubscription(subscriberID, publisherID string) {
 	a.store.DeleteSubscription(subscriberID, publisherID)
+}
+
+func (a *ServiceAdapter) CountSubscriptionsByStatus() map[service.SubscriptionStatus]int {
+	return a.store.CountSubscriptionsByStatus()
 }

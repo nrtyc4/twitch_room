@@ -825,3 +825,42 @@ func TestRefreshWatchStatesDelegatesLookupError(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsSnapshot(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true},
+			"stream-2": {Exists: true, IsLive: true},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	// Two watch states: one fresh within the TTL, one stale.
+	_, _ = svc.SetUserWatchState("publisher", []string{"stream-1"})
+	old, _ := svc.SetUserWatchState("stale-publisher", []string{"stream-2"})
+	stale, _ := repo.GetUserWatchState("stale-publisher")
+	stale.UpdatedAt = old.UpdatedAt.Add(-10 * time.Minute)
+	_, err := repo.UpsertUserWatchState(stale.UserID, stale.Streams, stale.UpdatedAt)
+	if err != nil {
+		t.Fatalf("UpsertUserWatchState: %v", err)
+	}
+
+	// Subscriptions in both statuses.
+	_, _ = svc.Subscribe("viewer-1", "publisher")
+	_, _ = svc.UpdatePublisherSettings(PublisherSettings{
+		UserID:           "publisher",
+		SubscriptionMode: SubscriptionModeApproved,
+		Visibility:       VisibilityPublic,
+	})
+	_, _ = svc.Subscribe("viewer-2", "publisher")
+
+	snap := svc.MetricsSnapshot()
+	if snap.ActiveWatchStates != 1 {
+		t.Fatalf("expected 1 active watch state, got %d", snap.ActiveWatchStates)
+	}
+	if snap.SubscriptionsByStatus[SubscriptionStatusActive] != 1 ||
+		snap.SubscriptionsByStatus[SubscriptionStatusPending] != 1 {
+		t.Fatalf("unexpected subscription counts: %v", snap.SubscriptionsByStatus)
+	}
+}

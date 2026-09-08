@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"twitch_room/internal/auth"
+	"twitch_room/internal/metrics"
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
 )
@@ -303,5 +304,181 @@ func TestHandlerChainSetsSecurityHeaders(t *testing.T) {
 	}
 	if got := resp.Header.Get("Strict-Transport-Security"); got == "" {
 		t.Error("expected HSTS header when TLS is enabled")
+	}
+}
+
+// newMetricsServer builds a server whose full middleware chain and /metrics
+// route are wired, seeded with one watch state and a mix of subscriptions.
+func newMetricsServer(middleware *auth.Middleware) (*server, *httptest.Server) {
+	svc := service.NewServiceWithEnricher(
+		service.NewMemoryRepository(),
+		time.Minute,
+		&fakeShareEnricher{},
+	)
+	_, _ = svc.SetUserWatchState("shroud", []string{"xqc"})
+	_, _ = svc.Subscribe("viewer", "shroud")
+	_, _ = svc.UpdatePublisherSettings(service.PublisherSettings{
+		UserID:           "shroud",
+		SubscriptionMode: service.SubscriptionModeOpen,
+		Visibility:       service.VisibilityPublic,
+	})
+	_ = svc.RespondToSubscriber("shroud", "viewer", true)
+
+	s := &server{
+		watchService:   svc,
+		authMiddleware: middleware,
+		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+		shareLimiter:   security.NewRateLimiter(100, time.Minute),
+		metrics:        metrics.New(),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/v1/users/foo", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	var handler http.Handler = withLogging(mux)
+	handler = s.metricsMiddleware(handler)
+	return s, httptest.NewServer(handler)
+}
+
+func TestMetricsPublicWhenNoTokenConfigured(t *testing.T) {
+	_, ts := newMetricsServer(&auth.Middleware{AllowDevAuth: true})
+	defer ts.Close()
+
+	// The first scrape populates the request counters (which are written
+	// after the response body is rendered), so assert on the second scrape.
+	first, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", first.StatusCode)
+	}
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("expected text/plain content type, got %q", got)
+	}
+
+	body := new(bytes.Buffer)
+	_, _ = body.ReadFrom(resp.Body)
+	out := body.String()
+	for _, want := range []string{
+		"# TYPE twitch_room_active_watch_states gauge",
+		`twitch_room_active_watch_states 1`,
+		`# TYPE twitch_room_subscriptions gauge`,
+		`twitch_room_subscriptions{status="active"} 1`,
+		`# TYPE twitch_room_http_requests_total counter`,
+		`# TYPE twitch_room_http_request_duration_seconds histogram`,
+		`twitch_room_app_info{version="dev"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics body missing %q", want)
+		}
+	}
+}
+
+func TestMetricsCountsThrottledRequests(t *testing.T) {
+	s := &server{metrics: metrics.New()}
+	s.incThrottled("auth_ip")
+	s.incThrottled("auth_ip")
+	s.incThrottled("share_ip")
+
+	out := string(s.metrics.Prometheus())
+	for _, want := range []string{
+		"# TYPE twitch_room_throttled_requests_total counter",
+		`twitch_room_throttled_requests_total{reason="auth_ip"} 2`,
+		`twitch_room_throttled_requests_total{reason="share_ip"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics body missing %q", want)
+		}
+	}
+}
+
+func TestMetricsRequiresTokenWhenConfigured(t *testing.T) {
+	_, ts := newMetricsServer(&auth.Middleware{ExpectedToken: "top-secret", AllowDevAuth: true})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/metrics", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with wrong token, got %d", resp.StatusCode)
+	}
+
+	req.Header.Set("Authorization", "Bearer top-secret")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with correct token, got %d", resp.StatusCode)
+	}
+}
+
+func TestMetricsMiddlewareBucketsRoutesByFirstSegment(t *testing.T) {
+	_, ts := newMetricsServer(&auth.Middleware{AllowDevAuth: true})
+	defer ts.Close()
+
+	// /v1/users/foo counts under v1/users, /health under health, /metrics
+	// under metrics.
+	urls := []string{ts.URL + "/v1/users/foo", ts.URL + "/health", ts.URL + "/metrics"}
+	for _, u := range urls {
+		resp, err := http.Get(u)
+		if err != nil {
+			t.Fatalf("request to %s failed: %v", u, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("request to %s returned %d", u, resp.StatusCode)
+		}
+	}
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body := new(bytes.Buffer)
+	_, _ = body.ReadFrom(resp.Body)
+	out := body.String()
+
+	// The rendered body never includes the request currently being served
+	// (counters are incremented after the body is written), and each route
+	// was hit exactly once before this scrape.
+	for _, want := range []string{
+		`twitch_room_http_requests_total{code="200",method="GET",route="v1/users"} 1`,
+		`twitch_room_http_requests_total{code="200",method="GET",route="health"} 1`,
+		`twitch_room_http_requests_total{code="200",method="GET",route="metrics"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics body missing %q", want)
+		}
 	}
 }

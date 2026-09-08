@@ -85,6 +85,21 @@ func (r *MemoryRepository) DeleteUserWatchState(userID string) {
 	delete(r.items, userID)
 }
 
+// CountActiveWatchStates returns the number of stored states last updated at
+// or after the given time, mirroring how the service treats non-expired ones.
+func (r *MemoryRepository) CountActiveWatchStates(updatedAfter time.Time) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, state := range r.items {
+		if !state.UpdatedAt.Before(updatedAfter) {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *MemoryRepository) SetPublisherSettings(settings PublisherSettings) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -156,4 +171,16 @@ func (r *MemoryRepository) DeleteSubscription(subscriberID, publisherID string) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.subscriptions, subscriptionKey(subscriberID, publisherID))
+}
+
+// CountSubscriptionsByStatus tallies every stored subscription by status.
+func (r *MemoryRepository) CountSubscriptionsByStatus() map[SubscriptionStatus]int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	counts := make(map[SubscriptionStatus]int)
+	for _, sub := range r.subscriptions {
+		counts[sub.Status]++
+	}
+	return counts
 }

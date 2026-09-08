@@ -297,6 +297,38 @@ func (ps *PostgresStore) ListSubscriptionsForPublisher(publisherID string, statu
 	return ps.querySubscriptions(query, publisherID, status)
 }
 
+// CountActiveWatchStates returns the number of stored states last updated at
+// or after the given time, mirroring how the service treats non-expired ones.
+func (ps *PostgresStore) CountActiveWatchStates(updatedAfter time.Time) int {
+	const query = `SELECT COUNT(*) FROM user_watch_state WHERE updated_at >= $1`
+	var count int
+	if err := ps.db.QueryRow(query, updatedAfter).Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
+// CountSubscriptionsByStatus tallies every stored subscription by status.
+func (ps *PostgresStore) CountSubscriptionsByStatus() map[service.SubscriptionStatus]int {
+	const query = `SELECT status, COUNT(*) FROM subscriptions GROUP BY status`
+	rows, err := ps.db.Query(query)
+	if err != nil {
+		return map[service.SubscriptionStatus]int{}
+	}
+	defer rows.Close()
+
+	counts := make(map[service.SubscriptionStatus]int)
+	for rows.Next() {
+		var status service.SubscriptionStatus
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			continue
+		}
+		counts[status] = count
+	}
+	return counts
+}
+
 // SetSubscriptionStatus updates the status of a subscription.
 func (ps *PostgresStore) SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error {
 	query := `UPDATE subscriptions SET status = $3 WHERE subscriber_id = $1 AND publisher_id = $2`

@@ -58,3 +58,27 @@ func TestUserIDRejectsMissingHeaders(t *testing.T) {
 		t.Fatal("expected unauthorized error for missing auth")
 	}
 }
+
+func TestAuthorized(t *testing.T) {
+	req := httptest.NewRequest("GET", "/metrics", nil)
+
+	public := Middleware{}
+	if !public.Authorized(req) {
+		t.Error("expected authorized when no token configured")
+	}
+
+	locked := Middleware{ExpectedToken: "top-secret"}
+	if locked.Authorized(req) {
+		t.Error("expected unauthorized without bearer header")
+	}
+
+	req.Header.Set(HeaderAuthorization, "Bearer wrong")
+	if locked.Authorized(req) {
+		t.Error("expected unauthorized with wrong token")
+	}
+
+	req.Header.Set(HeaderAuthorization, "Bearer top-secret")
+	if !locked.Authorized(req) {
+		t.Error("expected authorized with correct token")
+	}
+}

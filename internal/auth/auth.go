@@ -74,6 +74,21 @@ func headerUserID(r *http.Request) (string, error) {
 	return userID, nil
 }
 
+// Authorized reports whether the request carries the configured bearer token.
+// When no token is configured the endpoint is public to unauthenticated
+// callers (used to gate aggregate endpoints such as /metrics).
+func (m *Middleware) Authorized(r *http.Request) bool {
+	if m.ExpectedToken == "" {
+		return true
+	}
+	authorization := r.Header.Get(HeaderAuthorization)
+	if !strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		return false
+	}
+	token := strings.TrimSpace(authorization[7:])
+	return subtle.ConstantTimeCompare([]byte(token), []byte(m.ExpectedToken)) == 1
+}
+
 type contextKey string
 
 const userIDContextKey contextKey = "user_id"

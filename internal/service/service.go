@@ -94,6 +94,13 @@ type FeedEntry struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// MetricsSnapshot is a point-in-time aggregate over the whole repository,
+// consumed by the /metrics endpoint.
+type MetricsSnapshot struct {
+	ActiveWatchStates     int
+	SubscriptionsByStatus map[SubscriptionStatus]int
+}
+
 // StreamInfo describes what the Twitch API knows about a channel.
 type StreamInfo struct {
 	Exists       bool
@@ -122,6 +129,7 @@ type Repository interface {
 	GetUserWatchState(userID string) (UserWatchState, bool)
 	ListActiveUsers(limit int) []UserWatchState
 	DeleteUserWatchState(userID string)
+	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings PublisherSettings) error
 	GetPublisherSettings(userID string) (PublisherSettings, bool)
@@ -132,6 +140,7 @@ type Repository interface {
 	ListSubscriptionsForPublisher(publisherID string, status SubscriptionStatus) []Subscription
 	SetSubscriptionStatus(subscriberID, publisherID string, status SubscriptionStatus) error
 	DeleteSubscription(subscriberID, publisherID string)
+	CountSubscriptionsByStatus() map[SubscriptionStatus]int
 }
 
 type Service struct {
@@ -398,6 +407,17 @@ func (s *Service) ResolveDisplayName(userID string) string {
 		}
 	}
 	return userID
+}
+
+// MetricsSnapshot aggregates repository state for the /metrics endpoint: how
+// many watch states are currently live (not expired) and how subscriptions
+// are distributed across statuses.
+func (s *Service) MetricsSnapshot() MetricsSnapshot {
+	cutoff := time.Now().UTC().Add(-s.actionTTL)
+	return MetricsSnapshot{
+		ActiveWatchStates:     s.repo.CountActiveWatchStates(cutoff),
+		SubscriptionsByStatus: s.repo.CountSubscriptionsByStatus(),
+	}
 }
 
 func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {

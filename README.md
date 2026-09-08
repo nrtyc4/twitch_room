@@ -129,6 +129,7 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 - `Publish` request body: `{"stream_ids": ["shroud", "https://twitch.tv/xqc"]}` — accepts channel names or full `twitch.tv` URLs (deduplicated). Response includes a `streams` array.
 - `Twitch enrichment:` when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are set (they are in `.env` but intentionally absent from the Docker build), published stream IDs are resolved against the Twitch Helix API using the app client-credentials flow. Each stream gains `channel_name`, `title`, `game_name`, `thumbnail_url`, `viewer_count`, and `is_live`; IDs that do not match an existing channel are rejected with `400`. If Twitch is unreachable at publish time, the service degrades to storing plain IDs. With no credentials, plain IDs are stored as-is. While enrichment is enabled a background job re-resolves the metadata for every active state every `WATCH_REFRESH_SECONDS` (channels going live or offline update in the feed without a re-publish; the state's own `updated_at` — and therefore its expiry — is preserved).
 - `GET /health`
+- `GET /metrics` — Prometheus text-format metrics for scrapers (see [Metrics](#metrics))
 - `POST /v1/watch` — publish the streams you are currently watching
 - `DELETE /v1/watch` — stop watching (clears your published watch state)
 - `GET /v1/users/{user_id}/watch` — read a user's watch state (self, public publishers, or active subscribers)
@@ -150,6 +151,16 @@ All user, publisher, subscriber and stream identifiers are validated at the API 
 ## Public share pages
 
 Every publisher gets a read-only, unauthenticated page at `/u/{user_id}` — no login needed. It renders the publisher's current watch state (channel names, live status, viewer count, title and game when enrichment is enabled) with a thumbnail per stream, and auto-refreshes every two minutes. Only publishers whose watch visibility is set to **Public** get a page; subscriber-only, private, missing and expired states all return `404` so the page does not reveal whether a state exists. The share page is scaffolded per-IP to keep public scraping at bay, and a link to it appears in the app's Settings when a publisher switches visibility to Public.
+
+## Metrics
+
+`GET /metrics` serves a dependency-free Prometheus text-format exposition (`text/plain; version=0.0.4`) for scrapers. When a static `TWITCH_ROOM_AUTH_TOKEN` is configured, scrapers must present it as `Authorization: Bearer <token>` (401 otherwise); with no token configured the endpoint is public, like `/health`. Families exposed:
+
+- `twitch_room_http_requests_total{method,code,route}` and `twitch_room_http_request_duration_seconds{route}` (histogram) — request counts, status codes and durations. Route labels are collapsed to the first path segment (`v1/watch`, `v1/users`, …) so the label space stays small.
+- `twitch_room_throttled_requests_total{reason}` — requests rejected by a rate limiter (`auth_ip`, `watch_per_user`, `feed_per_user`, `share_ip`).
+- `twitch_room_active_watch_states` — publishers whose watch state has not expired.
+- `twitch_room_subscriptions{status}` — subscriptions tallied per status (`active`, `pending`).
+- `twitch_room_app_info{version}` — build info gauge.
 
 ## Notes
 
