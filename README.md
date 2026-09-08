@@ -134,4 +134,4 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 
 ## Notes
 
-The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. Sessions are currently held in an in-memory store, so a restart logs everyone out; a multi-instance deployment needs a shared session store.
+The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. OAuth session tokens are stored in the database too, so sessions survive a restart and work across multiple instances (memory sessions are used when no database is configured).

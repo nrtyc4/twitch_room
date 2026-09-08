@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"twitch_room/internal/performance"
@@ -14,7 +15,9 @@ import (
 )
 
 type PostgresStore struct {
-	db *sql.DB
+	db                 *sql.DB
+	cleanupMu          sync.Mutex
+	lastSessionCleanup time.Time
 }
 
 // NewPostgresStore creates a new PostgreSQL-backed repository.
@@ -72,6 +75,13 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher_id, status);
 	CREATE INDEX IF NOT EXISTS idx_subscriptions_subscriber ON subscriptions(subscriber_id);
+
+	CREATE TABLE IF NOT EXISTS sessions (
+		token TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
 	ALTER TABLE user_watch_state ADD COLUMN IF NOT EXISTS streams JSONB;
 	`

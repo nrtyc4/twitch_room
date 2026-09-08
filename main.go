@@ -115,6 +115,13 @@ func main() {
 	}
 
 	repo := repository.NewServiceAdapter(store)
+
+	// Sessions default to memory; when PostgreSQL is reachable they are stored
+	// there so a restart or a second instance keeps sessions valid.
+	sessions := newSessionStore(sessionTTL)
+	if pgStore, ok := store.(*repository.PostgresStore); ok {
+		sessions = newSessionStoreWithBackend(sessionTTL, postgresSessionBackend{store: pgStore})
+	}
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
 
 	// Enrich published streams with Twitch metadata when app credentials exist
@@ -146,7 +153,7 @@ func main() {
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
-		sessions:           newSessionStore(sessionTTL),
+		sessions:           sessions,
 		redirectAfterLogin: cfg.RedirectAfterLogin,
 	}
 

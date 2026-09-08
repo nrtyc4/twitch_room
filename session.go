@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"twitch_room/internal/repository"
 )
 
 const (
@@ -14,14 +16,42 @@ const (
 	sessionTokenBytes = 32
 )
 
-// sessionStore is an in-memory store of opaque session tokens issued after a
-// successful Twitch OAuth login. Sessions survive server restarts no longer
-// than the in-memory oauth state store; with multiple instances a shared store
-// would be required.
+// sessionBackend persists the token -> user mapping behind the cookie
+// handling. The default is an in-memory map; when PostgreSQL is configured a
+// postgresSessionBackend is used so sessions survive restarts and are shared
+// across instances.
+type sessionBackend interface {
+	save(token, userID string, expiresAt time.Time) error
+	userID(token string) (string, bool)
+	destroy(token string)
+}
+
+// sessionStore issues opaque session tokens after a successful Twitch OAuth
+// login and keeps the mapping between a token and its user.
 type sessionStore struct {
-	mu      sync.RWMutex
-	tokens  map[string]*sessionEntry
+	backend sessionBackend
 	timeout time.Duration
+}
+
+func newSessionStore(timeout time.Duration) *sessionStore {
+	return &sessionStore{
+		backend: newMemorySessionBackend(),
+		timeout: timeout,
+	}
+}
+
+func newSessionStoreWithBackend(timeout time.Duration, backend sessionBackend) *sessionStore {
+	return &sessionStore{
+		backend: backend,
+		timeout: timeout,
+	}
+}
+
+// memorySessionBackend is the in-memory token store used when no database is
+// configured.
+type memorySessionBackend struct {
+	mu     sync.RWMutex
+	tokens map[string]*sessionEntry
 }
 
 type sessionEntry struct {
@@ -29,11 +59,56 @@ type sessionEntry struct {
 	expiresAt time.Time
 }
 
-func newSessionStore(timeout time.Duration) *sessionStore {
-	return &sessionStore{
-		tokens:  make(map[string]*sessionEntry),
-		timeout: timeout,
+func newMemorySessionBackend() *memorySessionBackend {
+	return &memorySessionBackend{tokens: make(map[string]*sessionEntry)}
+}
+
+func (b *memorySessionBackend) save(token, userID string, expiresAt time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tokens[token] = &sessionEntry{userID: userID, expiresAt: expiresAt}
+	return nil
+}
+
+func (b *memorySessionBackend) userID(token string) (string, bool) {
+	if token == "" {
+		return "", false
 	}
+
+	b.mu.RLock()
+	entry, ok := b.tokens[token]
+	b.mu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		b.destroy(token)
+		return "", false
+	}
+	return entry.userID, true
+}
+
+func (b *memorySessionBackend) destroy(token string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.tokens, token)
+}
+
+// postgresSessionBackend persists sessions in the shared database.
+type postgresSessionBackend struct {
+	store *repository.PostgresStore
+}
+
+func (b postgresSessionBackend) save(token, userID string, expiresAt time.Time) error {
+	return b.store.SaveSession(token, userID, expiresAt)
+}
+
+func (b postgresSessionBackend) userID(token string) (string, bool) {
+	return b.store.SessionUserID(token)
+}
+
+func (b postgresSessionBackend) destroy(token string) {
+	b.store.DeleteSession(token)
 }
 
 func (s *sessionStore) create(userID string) (string, error) {
@@ -43,37 +118,18 @@ func (s *sessionStore) create(userID string) (string, error) {
 	}
 	token := hex.EncodeToString(b)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tokens[token] = &sessionEntry{
-		userID:    userID,
-		expiresAt: time.Now().Add(s.timeout),
+	if err := s.backend.save(token, userID, time.Now().Add(s.timeout)); err != nil {
+		return "", err
 	}
 	return token, nil
 }
 
 func (s *sessionStore) userID(token string) (string, bool) {
-	if token == "" {
-		return "", false
-	}
-
-	s.mu.RLock()
-	entry, ok := s.tokens[token]
-	s.mu.RUnlock()
-	if !ok {
-		return "", false
-	}
-	if time.Now().After(entry.expiresAt) {
-		s.destroy(token)
-		return "", false
-	}
-	return entry.userID, true
+	return s.backend.userID(token)
 }
 
 func (s *sessionStore) destroy(token string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tokens, token)
+	s.backend.destroy(token)
 }
 
 // userIDFromRequest resolves the caller identity from the session cookie if a
