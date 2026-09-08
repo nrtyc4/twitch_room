@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -627,12 +628,15 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 		rateLimiter:        security.NewRateLimiter(100, time.Minute),
 		watchStateCache:    performance.NewWatchStateCache(5 * time.Minute),
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
+		sessions:           newSessionStore(24 * time.Hour),
 		redirectAfterLogin: "/app",
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
+	mux.HandleFunc("/auth/me", s.handleMe)
+	mux.HandleFunc("/auth/logout", s.handleLogout)
 	mux.HandleFunc("/v1/watch", s.handleWatch)
 
 	testServer := httptest.NewServer(mux)
@@ -657,8 +661,8 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 		t.Fatalf("expected redirect to Twitch authorize URL, got %q", loc)
 	}
 
-	// Test 2: Callback with the issued state and a code resolves the user and
-	// redirects the browser into the app with the user id.
+	// Test 2: Callback with the issued state and a code resolves the user,
+	// sets a session cookie, and redirects the browser into the app.
 	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state=test-state&code=abc123", nil)
 	callbackResp, err := client.Do(callbackReq)
 	if err != nil {
@@ -670,6 +674,86 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	cbLoc := callbackResp.Header.Get("Location")
 	if cbLoc != "/app?user_id=twitch-login-user" {
 		t.Fatalf("expected redirect into the app, got %q", cbLoc)
+	}
+
+	// The callback must set an HttpOnly session cookie.
+	sessionCookies := callbackResp.Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range sessionCookies {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("expected a session cookie to be set on the callback response")
+	}
+	if !sessionCookie.HttpOnly {
+		t.Fatal("expected the session cookie to be HttpOnly")
+	}
+
+	// A follow-up request carrying the cookie is authenticated without any
+	// X-User-ID header, via the session store.
+	jar, _ := cookiejar.New(nil)
+	jar.SetCookies(callbackResp.Request.URL, []*http.Cookie{sessionCookie})
+	sessionClient := &http.Client{Jar: jar}
+
+	meReq, _ := http.NewRequest("GET", testServer.URL+"/auth/me", nil)
+	meResp, err := sessionClient.Do(meReq)
+	if err != nil {
+		t.Fatalf("me request failed: %v", err)
+	}
+	if meResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /auth/me with session, got %d", meResp.StatusCode)
+	}
+	meBody, _ := io.ReadAll(meResp.Body)
+	meResp.Body.Close()
+	var me map[string]interface{}
+	json.Unmarshal(meBody, &me)
+	if me["user_id"] != "twitch-login-user" {
+		t.Fatalf("expected session user twitch-login-user, got %v", me["user_id"])
+	}
+
+	// The session authenticates API calls too.
+	sessWatchReq, _ := http.NewRequest("POST", testServer.URL+"/v1/watch", bytes.NewReader([]byte(`{"stream_ids":["cookie-stream"]}`)))
+	sessWatchReq.Header.Set("Content-Type", "application/json")
+	sessWatchResp, err := sessionClient.Do(sessWatchReq)
+	if err != nil {
+		t.Fatalf("session watch request failed: %v", err)
+	}
+	if sessWatchResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating watch state via session, got %d", sessWatchResp.StatusCode)
+	}
+	sessWatchResp.Body.Close()
+
+	// Logging out destroys the session so the cookie no longer authenticates.
+	logoutReq, _ := http.NewRequest("POST", testServer.URL+"/auth/logout", nil)
+	logoutResp, err := sessionClient.Do(logoutReq)
+	if err != nil {
+		t.Fatalf("logout request failed: %v", err)
+	}
+	if logoutResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 from logout, got %d", logoutResp.StatusCode)
+	}
+	logoutResp.Body.Close()
+
+	meAfterReq, _ := http.NewRequest("GET", testServer.URL+"/auth/me", nil)
+	meAfterResp, err := sessionClient.Do(meAfterReq)
+	if err != nil {
+		t.Fatalf("me after logout failed: %v", err)
+	}
+	// The stub identity provider re-authenticates unconditionally, so /auth/me
+	// still succeeds. What must be verified is that the server-side session was
+	// actually destroyed.
+	if meAfterResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /auth/me after logout (stub authenticates), got %d", meAfterResp.StatusCode)
+	}
+	meAfterResp.Body.Close()
+
+	if sessionCookie != nil {
+		if _, ok := s.sessions.userID(sessionCookie.Value); ok {
+			t.Fatal("expected the session token to be destroyed after logout")
+		}
 	}
 
 	// Test 3: Callback with an unknown state is rejected.

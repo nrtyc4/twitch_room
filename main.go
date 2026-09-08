@@ -34,6 +34,7 @@ type server struct {
 	rateLimiter        *security.RateLimiter
 	watchStateCache    *performance.WatchStateCache
 	oauthStates        *oauthStateStore
+	sessions           *sessionStore
 	redirectAfterLogin string
 }
 
@@ -135,6 +136,7 @@ func main() {
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
+		sessions:           newSessionStore(sessionTTL),
 		redirectAfterLogin: cfg.RedirectAfterLogin,
 	}
 
@@ -150,6 +152,8 @@ func main() {
 	mux.HandleFunc("/v1/subscription_requests/", s.handleSubscriptionRequestAction)
 	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
+	mux.HandleFunc("/auth/me", s.handleMe)
+	mux.HandleFunc("/auth/logout", s.handleLogout)
 
 	webHandler, err := newWebHandler()
 	if err != nil {
@@ -548,8 +552,18 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect the browser into the app, carrying the resolved identity in the
-	// query string so the client can authenticate subsequent requests.
+	// Issue a session cookie so the browser can authenticate API calls without
+	// holding the raw Twitch token.
+	if s.sessions != nil {
+		if err := s.sessions.setSessionCookie(w, r, userID); err != nil {
+			log.Printf("failed to create session: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+			return
+		}
+	}
+
+	// Redirect the browser into the app. The user_id query parameter is kept
+	// as a convenience for clients that do not use cookies.
 	redirect := s.redirectAfterLogin
 	if redirect == "" {
 		redirect = "/"
@@ -561,9 +575,42 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirect+sep+"user_id="+url.QueryEscape(userID), http.StatusFound)
 }
 
+func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"user_id": userID})
+}
+
+func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	if s.sessions != nil {
+		s.sessions.destroySessionCookie(w, r)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) requireUser(r *http.Request) (string, bool) {
 	if userID, ok := auth.UserIDFromContext(r.Context()); ok && userID != "" {
 		return userID, true
+	}
+
+	// A session cookie issued after Twitch login authenticates the caller.
+	if s.sessions != nil {
+		if userID, ok := s.sessions.userIDFromRequest(r); ok {
+			return userID, true
+		}
 	}
 
 	userID, err := s.authMiddleware.UserID(r)

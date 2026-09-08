@@ -1,7 +1,9 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+let sessionUser = null;
 let currentUser = localStorage.getItem("twitch-room-user") || "";
+let usingSession = false;
 
 const params = new URLSearchParams(window.location.search);
 const oauthUser = params.get("user_id");
@@ -11,13 +13,47 @@ if (oauthUser) {
   history.replaceState(null, "", "/");
 }
 
+async function fetchMe() {
+  const resp = await fetch("/auth/me");
+  if (resp.status === 200) {
+    try {
+      const data = await resp.json();
+      if (data.user_id) sessionUser = data.user_id;
+    } catch (e) { /* ignore */ }
+  }
+}
+
 function setIdentity(userID) {
-  const trimmied = (userID || "").trim();
-  if (!trimmied) return;
-  currentUser = trimmied;
+  const trimmed = (userID || "").trim();
+  if (!trimmed) return;
+  currentUser = trimmed;
+  usingSession = false;
+  sessionUser = null;
   localStorage.setItem("twitch-room-user", currentUser);
   $("user-id").value = currentUser;
+  updateIdentityBar();
   loadAll();
+}
+
+function updateIdentityBar() {
+  const loggedIn = Boolean(usingSession && sessionUser);
+  $("twitch-login").hidden = loggedIn;
+  $("logout").hidden = !loggedIn;
+  $("user-id").hidden = loggedIn;
+  $("identity-set").hidden = loggedIn;
+  $("user-id").placeholder = loggedIn
+    ? `Signed in as ${sessionUser}`
+    : "your user id";
+}
+
+async function logout() {
+  await api("POST", "/auth/logout");
+  sessionUser = null;
+  usingSession = false;
+  currentUser = "";
+  localStorage.removeItem("twitch-room-user");
+  updateIdentityBar();
+  location.reload();
 }
 
 function fmtTime(iso) {
@@ -28,11 +64,16 @@ function fmtTime(iso) {
 
 async function api(method, path, body) {
   const headers = {};
-  if (currentUser) headers["X-User-ID"] = currentUser;
+  if (usingSession && sessionUser) {
+    headers["X-User-ID"] = sessionUser;
+  } else if (currentUser) {
+    headers["X-User-ID"] = currentUser;
+  }
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const resp = await fetch(path, {
     method,
     headers,
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (resp.status === 401) {
@@ -238,7 +279,8 @@ function bindCardActions(container) {
 }
 
 function loadAll() {
-  if (!currentUser) return;
+  const user = usingSession && sessionUser ? sessionUser : currentUser;
+  if (!user) return;
   loadFeed();
   loadWatch();
   loadPeople();
@@ -260,6 +302,7 @@ $("identity-set").addEventListener("click", () => setIdentity($("user-id").value
 $("user-id").addEventListener("keydown", (e) => {
   if (e.key === "Enter") setIdentity($("user-id").value);
 });
+$("logout").addEventListener("click", logout);
 $("watch-save").addEventListener("click", saveWatch);
 $("watch-clear").addEventListener("click", clearWatch);
 $("follow-btn").addEventListener("click", followUser);
@@ -268,11 +311,21 @@ $("follow-input").addEventListener("keydown", (e) => {
 });
 $("settings-save").addEventListener("click", saveSettings);
 
-$("user-id").value = currentUser;
-setInterval(loadFeed, 15000);
+async function init() {
+  await fetchMe();
+  if (sessionUser) {
+    usingSession = true;
+    currentUser = sessionUser;
+  }
+  updateIdentityBar();
+  $("user-id").value = currentUser;
 
-if (currentUser) {
-  loadAll();
-} else {
-  $("feed").innerHTML = `<div class="empty">Enter a user id above (or Login with Twitch) to get started.</div>`;
+  if (currentUser) {
+    loadAll();
+  } else {
+    $("feed").innerHTML = `<div class="empty">Login with Twitch or enter a user id above to get started.</div>`;
+  }
 }
+
+setInterval(loadFeed, 15000);
+init();

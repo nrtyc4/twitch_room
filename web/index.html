@@ -10,10 +10,10 @@
 <header>
   <h1>Twitch Room</h1>
   <div class="identity">
-    <label for="user-id">Signed in as</label>
     <input id="user-id" type="text" placeholder="your user id" autocomplete="off">
     <button id="identity-set" type="button">Use</button>
-    <a id="twitch-login" href="/auth/twitch">Login with Twitch</a>
+    <a id="twitch-login" href="/auth/twitch" hidden>Login with Twitch</a>
+    <button id="logout" type="button" class="secondary" hidden>Log out</button>
   </div>
 </header>
 

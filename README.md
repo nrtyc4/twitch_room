@@ -58,10 +58,11 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 
 ## Authentication
 
-Requests to the watch/feed endpoints must be authenticated. The service accepts either of the following:
+Requests to the watch/feed endpoints must be authenticated. The service accepts, in order of precedence:
 
-- An `X-User-ID` header with the target user's ID (dev auth, or the `user_id` from the OAuth callback). When `TWITCH_ROOM_AUTH_TOKEN` is set, the `X-User-ID` header must also carry a matching `Authorization: Bearer <token>`.
-- A valid Twitch access token in the `Authorization: Bearer <token>` header, which is validated against Twitch before being trusted.
+1. A valid session cookie set after a real Twitch login (`/auth/twitch` → `/auth/twitch/callback`). The callback issues an HttpOnly, SameSite=Lax session cookie; the browser then authenticates automatically. `GET /auth/me` reports the session user, and `POST /auth/logout` destroys the session.
+2. An `X-User-ID` header with the target user's ID (dev auth). When `TWITCH_ROOM_AUTH_TOKEN` is set, the `X-User-ID` header must also carry a matching `Authorization: Bearer <token>`.
+3. A valid Twitch access token in the `Authorization: Bearer <token>` header, validated against Twitch via the identity provider.
 
 Users can always read or update their own watch state. Everyone reads someone else's watch state only when the publisher's visibility setting allows it and (for `subscribers` visibility) the reader has an active subscription. Subscription mode and visibility are enforced server-side regardless of the headers sent.
 
