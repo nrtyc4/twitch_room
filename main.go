@@ -27,6 +27,7 @@ import (
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
 	"twitch_room/internal/twitchapi"
+	"twitch_room/internal/validate"
 )
 
 type watchRequest struct {
@@ -396,7 +397,7 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	state, err := s.watchService.SetUserWatchState(userID, payload.StreamIDs)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidStream) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one valid stream ID is required"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid stream IDs: expected 1-100 characters of letters, digits, '_' or '-' (up to 50)"})
 			return
 		}
 		if errors.Is(err, service.ErrStreamNotFound) {
@@ -427,8 +428,8 @@ func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
 	pathUserID := strings.TrimPrefix(r.URL.Path, "/v1/users/")
 	pathUserID = strings.TrimSuffix(pathUserID, "/watch")
 	pathUserID = strings.TrimSpace(pathUserID)
-	if pathUserID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing user id"})
+	if err := validate.UserID(pathUserID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user id"})
 		return
 	}
 
@@ -559,8 +560,8 @@ func (s *server) handleSubscription(w http.ResponseWriter, r *http.Request) {
 
 	publisherID := strings.TrimPrefix(r.URL.Path, "/v1/subscriptions/")
 	publisherID = strings.TrimSpace(publisherID)
-	if publisherID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing publisher id"})
+	if err := validate.UserID(publisherID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid publisher id"})
 		return
 	}
 
@@ -635,6 +636,11 @@ func (s *server) handleSubscriptionRequestAction(w http.ResponseWriter, r *http.
 	}
 	subscriberID := strings.TrimSpace(parts[0])
 	action := strings.TrimSpace(parts[1])
+
+	if err := validate.UserID(subscriberID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid subscriber id"})
+		return
+	}
 
 	var approve bool
 	switch action {
@@ -792,12 +798,18 @@ func (s *server) rateLimitByIP(w http.ResponseWriter, r *http.Request) bool {
 
 func (s *server) requireUser(r *http.Request) (string, bool) {
 	if userID, ok := auth.UserIDFromContext(r.Context()); ok && userID != "" {
+		if err := validate.UserID(userID); err != nil {
+			return "", false
+		}
 		return userID, true
 	}
 
 	// A session cookie issued after Twitch login authenticates the caller.
 	if s.sessions != nil {
 		if userID, ok := s.sessions.userIDFromRequest(r); ok {
+			if err := validate.UserID(userID); err != nil {
+				return "", false
+			}
 			return userID, true
 		}
 	}
@@ -812,6 +824,9 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 	if s.identityProvider != nil {
 		userID, err = s.identityProvider.ResolveUserID(r.Context(), r)
 		if err != nil {
+			return "", false
+		}
+		if err := validate.UserID(userID); err != nil {
 			return "", false
 		}
 		return userID, true

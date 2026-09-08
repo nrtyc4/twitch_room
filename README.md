@@ -143,6 +143,10 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 - `GET /auth/twitch`
 - `GET /auth/twitch/callback`
 
+### Input strictness
+
+All user, publisher, subscriber and stream identifiers are validated at the API boundary (and again in the service layer): they must be 1-100 characters of letters, digits, `_` or `-`. Twitch channel URLs are still accepted in `stream_ids` because they are normalised to the channel login first; anything else is rejected with `400` before it reaches storage or the Twitch API. A single watch state is capped at `50` streams. An `X-User-ID` (or `X-User-ID` obtained via a real Twitch login) that violates the rules is rejected with `401`.
+
 ## Notes
 
 The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. OAuth session tokens are stored in the database too, so sessions survive a restart and work across multiple instances (memory sessions are used when no database is configured). When Twitch credentials are configured, publisher display names in the feed are resolved from the Twitch users API (cached briefly) and fall back to the raw user ID.

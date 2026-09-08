@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"twitch_room/internal/validate"
 )
 
 var (
@@ -21,6 +23,10 @@ var (
 	ErrNoPendingRequest      = errors.New("no pending subscription request")
 	ErrInvalidSettings       = errors.New("invalid settings")
 )
+
+// MaxStreamsPerWatch caps the number of streams a single watch state may
+// hold, matching the strict 1MB request body budget with a sane upper bound.
+const MaxStreamsPerWatch = 50
 
 type SubscriptionMode string
 
@@ -152,13 +158,21 @@ func NewServiceWithEnricher(repo Repository, actionTTL time.Duration, enricher S
 }
 
 func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatchState, error) {
-	if userID == "" {
-		return UserWatchState{}, ErrInvalidUser
+	if err := checkUserID(userID); err != nil {
+		return UserWatchState{}, err
 	}
 
 	cleaned := normalizeStreamIDs(streamIDs)
 	if len(cleaned) == 0 {
 		return UserWatchState{}, ErrInvalidStream
+	}
+	if len(cleaned) > MaxStreamsPerWatch {
+		return UserWatchState{}, ErrInvalidStream
+	}
+	for _, id := range cleaned {
+		if err := validate.StreamID(id); err != nil {
+			return UserWatchState{}, ErrInvalidStream
+		}
 	}
 
 	now := time.Now().UTC()
@@ -325,8 +339,8 @@ func refreshStreams(state UserWatchState, info map[string]StreamInfo) []Stream {
 }
 
 func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
-	if userID == "" {
-		return UserWatchState{}, ErrInvalidUser
+	if err := checkUserID(userID); err != nil {
+		return UserWatchState{}, err
 	}
 
 	state, ok := s.repo.GetUserWatchState(userID)
@@ -422,8 +436,8 @@ func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 }
 
 func (s *Service) ClearUserWatchState(userID string) error {
-	if userID == "" {
-		return ErrInvalidUser
+	if err := checkUserID(userID); err != nil {
+		return err
 	}
 
 	if _, ok := s.repo.GetUserWatchState(userID); !ok {
@@ -435,8 +449,8 @@ func (s *Service) ClearUserWatchState(userID string) error {
 }
 
 func (s *Service) UpdatePublisherSettings(settings PublisherSettings) (PublisherSettings, error) {
-	if settings.UserID == "" {
-		return PublisherSettings{}, ErrInvalidUser
+	if err := checkUserID(settings.UserID); err != nil {
+		return PublisherSettings{}, err
 	}
 	if settings.SubscriptionMode != SubscriptionModeOpen && settings.SubscriptionMode != SubscriptionModeApproved {
 		return PublisherSettings{}, ErrInvalidSettings
@@ -454,8 +468,8 @@ func (s *Service) UpdatePublisherSettings(settings PublisherSettings) (Publisher
 }
 
 func (s *Service) GetPublisherSettings(userID string) (PublisherSettings, error) {
-	if userID == "" {
-		return PublisherSettings{}, ErrInvalidUser
+	if err := checkUserID(userID); err != nil {
+		return PublisherSettings{}, err
 	}
 
 	settings, ok := s.repo.GetPublisherSettings(userID)
@@ -470,8 +484,8 @@ func (s *Service) GetPublisherSettings(userID string) (PublisherSettings, error)
 }
 
 func (s *Service) Subscribe(subscriberID, publisherID string) (Subscription, error) {
-	if subscriberID == "" || publisherID == "" {
-		return Subscription{}, ErrInvalidSubscription
+	if err := checkIDPair(subscriberID, publisherID); err != nil {
+		return Subscription{}, err
 	}
 	if subscriberID == publisherID {
 		return Subscription{}, ErrCannotSubscribeToSelf
@@ -505,8 +519,8 @@ func (s *Service) Subscribe(subscriberID, publisherID string) (Subscription, err
 }
 
 func (s *Service) Unsubscribe(subscriberID, publisherID string) error {
-	if subscriberID == "" || publisherID == "" {
-		return ErrInvalidSubscription
+	if err := checkIDPair(subscriberID, publisherID); err != nil {
+		return err
 	}
 
 	if _, ok := s.repo.GetSubscription(subscriberID, publisherID); !ok {
@@ -518,22 +532,22 @@ func (s *Service) Unsubscribe(subscriberID, publisherID string) error {
 }
 
 func (s *Service) ListSubscriptions(subscriberID string) ([]Subscription, error) {
-	if subscriberID == "" {
-		return nil, ErrInvalidUser
+	if err := checkUserID(subscriberID); err != nil {
+		return nil, err
 	}
 	return s.repo.ListSubscriptionsForSubscriber(subscriberID), nil
 }
 
 func (s *Service) ListPendingRequests(publisherID string) ([]Subscription, error) {
-	if publisherID == "" {
-		return nil, ErrInvalidUser
+	if err := checkUserID(publisherID); err != nil {
+		return nil, err
 	}
 	return s.repo.ListSubscriptionsForPublisher(publisherID, SubscriptionStatusPending), nil
 }
 
 func (s *Service) RespondToSubscriber(publisherID, subscriberID string, approve bool) error {
-	if publisherID == "" || subscriberID == "" {
-		return ErrInvalidSubscription
+	if err := checkIDPair(publisherID, subscriberID); err != nil {
+		return err
 	}
 	if publisherID == subscriberID {
 		return ErrCannotSubscribeToSelf
@@ -556,8 +570,11 @@ func (s *Service) RespondToSubscriber(publisherID, subscriberID string, approve 
 }
 
 func (s *Service) CanView(viewerID, publisherID string) (bool, error) {
-	if viewerID == "" || publisherID == "" {
-		return false, ErrInvalidUser
+	if err := checkUserID(viewerID); err != nil {
+		return false, err
+	}
+	if err := checkUserID(publisherID); err != nil {
+		return false, err
 	}
 	if viewerID == publisherID {
 		return true, nil
@@ -596,6 +613,26 @@ func streamIDsFromStreams(streams []Stream) []string {
 		ids = append(ids, st.ID)
 	}
 	return ids
+}
+
+// checkUserID enforces the strict identifier rules for user, publisher and
+// subscriber IDs.
+func checkUserID(id string) error {
+	if err := validate.UserID(id); err != nil {
+		return ErrInvalidUser
+	}
+	return nil
+}
+
+// checkIDPair validates both identifiers in subscription relationships.
+func checkIDPair(a, b string) error {
+	if err := checkUserID(a); err != nil {
+		return ErrInvalidSubscription
+	}
+	if err := checkUserID(b); err != nil {
+		return ErrInvalidSubscription
+	}
+	return nil
 }
 
 func normalizeStreamIDs(ids []string) []string {

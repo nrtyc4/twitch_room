@@ -1,13 +1,16 @@
-package main
+﻿package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"twitch_room/internal/auth"
 	"twitch_room/internal/security"
+	"twitch_room/internal/service"
 )
 
 func TestAuthLoginRateLimitedByIP(t *testing.T) {
@@ -73,6 +76,83 @@ func TestSessionCookieNotSecureByDefaultOverPlainHTTP(t *testing.T) {
 
 	if strings.Contains(rec.Header().Get("Set-Cookie"), "Secure") {
 		t.Fatal("expected no Secure flag over plain HTTP without explicit opt-in")
+	}
+}
+
+func TestWatchRejectsInvalidStreamID(t *testing.T) {
+	s := &server{
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		authMiddleware: &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	for _, body := range []string{
+		`{"stream_ids":["bad/id"]}`,
+		`{"stream_ids":["a b"]}`,
+	} {
+		req, _ := http.NewRequest(http.MethodPost, testServer.URL+"/v1/watch", bytes.NewBufferString(body))
+		req.Header.Set(auth.HeaderUserID, "dev-watcher")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("body %s: expected 400, got %d", body, resp.StatusCode)
+		}
+	}
+}
+
+func TestRequireUserRejectsMalformedIDs(t *testing.T) {
+	s := &server{
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		authMiddleware: &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, testServer.URL+"/v1/watch", nil)
+	req.Header.Set(auth.HeaderUserID, "bad/user")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for malformed X-User-ID, got %d", resp.StatusCode)
+	}
+}
+
+func TestUserPathRejectsMalformedID(t *testing.T) {
+	s := &server{
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		authMiddleware: &auth.Middleware{AllowDevAuth: true},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/users/", s.handleUserWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, testServer.URL+"/v1/users/bad~id/watch", nil)
+	req.Header.Set(auth.HeaderUserID, "viewer")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for malformed path user id, got %d", resp.StatusCode)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"twitch_room/internal/validate"
 )
 
 var ErrUnauthorized = errors.New("unauthorized")
@@ -46,23 +48,30 @@ func (m *Middleware) UserID(r *http.Request) (string, error) {
 		if strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
 			token := strings.TrimSpace(authorization[7:])
 			if subtle.ConstantTimeCompare([]byte(token), []byte(m.ExpectedToken)) == 1 {
-				userID := strings.TrimSpace(r.Header.Get(HeaderUserID))
-				if userID != "" {
-					return userID, nil
-				}
-				return "", ErrUnauthorized
+				return headerUserID(r)
 			}
 		}
 	}
 
 	if m.AllowDevAuth {
-		userID := strings.TrimSpace(r.Header.Get(HeaderUserID))
-		if userID != "" {
-			return userID, nil
-		}
+		return headerUserID(r)
 	}
 
 	return "", ErrUnauthorized
+}
+
+// headerUserID extracts and validates the X-User-ID header so that
+// identifiers persisted and echoed by the API always conform to the strict
+// name rules.
+func headerUserID(r *http.Request) (string, error) {
+	userID := strings.TrimSpace(r.Header.Get(HeaderUserID))
+	if userID == "" {
+		return "", ErrUnauthorized
+	}
+	if err := validate.UserID(userID); err != nil {
+		return "", err
+	}
+	return userID, nil
 }
 
 type contextKey string

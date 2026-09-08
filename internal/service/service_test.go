@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -66,6 +67,53 @@ func TestSetUserWatchState(t *testing.T) {
 
 	if len(state.StreamIDs) != 2 {
 		t.Fatalf("expected 2 streams, got %d", len(state.StreamIDs))
+	}
+}
+
+func TestSetUserWatchStateRejectsStrictnessViolations(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, time.Minute)
+
+	if _, err := svc.SetUserWatchState("bad/user", []string{"stream-1"}); !errors.Is(err, ErrInvalidUser) {
+		t.Fatalf("expected ErrInvalidUser for malformed user id, got %v", err)
+	}
+	if _, err := svc.SetUserWatchState("user-1", []string{"xqc/extra"}); !errors.Is(err, ErrInvalidStream) {
+		t.Fatalf("expected ErrInvalidStream for malformed stream id, got %v", err)
+	}
+
+	tooMany := make([]string, MaxStreamsPerWatch+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("stream-%d", i)
+	}
+	if _, err := svc.SetUserWatchState("user-1", tooMany); !errors.Is(err, ErrInvalidStream) {
+		t.Fatalf("expected ErrInvalidStream for excessive stream count, got %v", err)
+	}
+
+	// A normalised Twitch URL is still accepted.
+	state, err := svc.SetUserWatchState("user-1", []string{"https://www.twitch.tv/xqc"})
+	if err != nil {
+		t.Fatalf("expected URL stream id to normalise, got error: %v", err)
+	}
+	if len(state.StreamIDs) != 1 || state.StreamIDs[0] != "xqc" {
+		t.Fatalf("expected normalized xqc stream, got %v", state.StreamIDs)
+	}
+}
+
+func TestSubscribeRejectsMalformedPublisher(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, time.Minute)
+
+	if _, err := svc.Subscribe("viewer", "publisher/id"); !errors.Is(err, ErrInvalidSubscription) {
+		t.Fatalf("expected ErrInvalidSubscription for malformed publisher id, got %v", err)
+	}
+}
+
+func TestCanViewRejectsMalformedIDs(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo, time.Minute)
+
+	if _, err := svc.CanView("viewer", "publisher id"); !errors.Is(err, ErrInvalidUser) {
+		t.Fatalf("expected ErrInvalidUser for malformed ids, got %v", err)
 	}
 }
 
