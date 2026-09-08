@@ -8,8 +8,9 @@ import (
 )
 
 type fakeEnricher struct {
-	info map[string]StreamInfo
-	err  error
+	info  map[string]StreamInfo
+	users map[string]string
+	err   error
 }
 
 func (f *fakeEnricher) LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error) {
@@ -19,6 +20,33 @@ func (f *fakeEnricher) LookupStreams(ctx context.Context, logins []string) (map[
 	out := make(map[string]StreamInfo, len(logins))
 	for _, login := range logins {
 		out[login] = f.info[login]
+	}
+	return out, nil
+}
+
+func (f *fakeEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make(map[string]string, len(userIDs))
+	for _, id := range userIDs {
+		if name, ok := f.users[id]; ok {
+			out[id] = name
+		}
+	}
+	return out, nil
+}
+
+// bareEnricher satisfies StreamEnricher but not UserResolver, modelling an
+// enricher that cannot resolve publisher display names.
+type bareEnricher struct {
+	info map[string]StreamInfo
+}
+
+func (e *bareEnricher) LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error) {
+	out := make(map[string]StreamInfo, len(logins))
+	for _, login := range logins {
+		out[login] = e.info[login]
 	}
 	return out, nil
 }
@@ -456,6 +484,67 @@ func TestListFeedUsesEnrichedStreams(t *testing.T) {
 	}
 	if entry.Streams[0].Title != "title-1" || entry.Streams[0].GameName != "GameX" {
 		t.Fatalf("unexpected enriched feed stream: %+v", entry.Streams[0])
+	}
+}
+
+func TestListFeedUsesPublisherDisplayNames(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, ChannelName: "Stream One"},
+		},
+		users: map[string]string{"publisher-a": "Publisher A"},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
+	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	feed := svc.ListFeed("viewer", 10)
+	if len(feed) != 1 {
+		t.Fatalf("expected 1 feed entry, got %d", len(feed))
+	}
+	if feed[0].DisplayName != "Publisher A" {
+		t.Fatalf("expected resolved display name, got %q", feed[0].DisplayName)
+	}
+}
+
+func TestListFeedFallsBackToRawUserID(t *testing.T) {
+	repo := NewMemoryRepository()
+	// Resolver returns an empty map for this publisher.
+	enricher := &fakeEnricher{
+		info:  map[string]StreamInfo{"stream-1": {Exists: true, ChannelName: "Stream One"}},
+		users: map[string]string{},
+	}
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+
+	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
+	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	feed := svc.ListFeed("viewer", 10)
+	if feed[0].DisplayName != "publisher-a" {
+		t.Fatalf("expected raw user id fallback, got %q", feed[0].DisplayName)
+	}
+}
+
+func TestListFeedWithoutUserResolverUsesRawID(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewServiceWithEnricher(repo, time.Minute, &bareEnricher{
+		info: map[string]StreamInfo{"stream-1": {Exists: true}},
+	})
+
+	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
+	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	feed := svc.ListFeed("viewer", 10)
+	if feed[0].DisplayName != "publisher-a" {
+		t.Fatalf("expected raw user id without resolver, got %q", feed[0].DisplayName)
 	}
 }
 

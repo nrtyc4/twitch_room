@@ -14,6 +14,7 @@ import (
 type fakeHelix struct {
 	mu         sync.Mutex
 	tokenCalls int32
+	usersCalls int32
 	usersData  []helixUser
 	streams    []helixStream
 }
@@ -28,15 +29,41 @@ func (f *fakeHelix) handler(t *testing.T) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"access_token": "test-token", "expires_in": 3600})
 		case r.URL.Path == "/users":
+			f.mu.Lock()
+			f.usersCalls++
+			want := loginSet(r.URL.Query()["login"])
+			data := make([]helixUser, 0, len(f.usersData))
+			for _, u := range f.usersData {
+				if want[strings.ToLower(u.Login)] {
+					data = append(data, u)
+				}
+			}
+			f.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"data": f.usersData})
+			json.NewEncoder(w).Encode(map[string]any{"data": data})
 		case r.URL.Path == "/streams":
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"data": f.streams})
+			want := loginSet(r.URL.Query()["user_login"])
+			data := make([]helixStream, 0, len(f.streams))
+			for _, st := range f.streams {
+				if want[strings.ToLower(st.UserLogin)] {
+					data = append(data, st)
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data})
 		default:
 			http.NotFound(w, r)
 		}
 	})
+}
+
+// loginSet normalizes a list of query filter values into a lowercase lookup set.
+func loginSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		set[strings.ToLower(strings.TrimSpace(v))] = true
+	}
+	return set
 }
 
 func newTestClient(t *testing.T, f *fakeHelix) (*Client, *httptest.Server) {
@@ -142,6 +169,83 @@ func TestLookupStreamsRejectsNonexistent(t *testing.T) {
 	}
 	if info["noonehere"].Exists {
 		t.Fatal("expected login to not exist")
+	}
+}
+
+func TestResolveUsers(t *testing.T) {
+	f := &fakeHelix{
+		usersData: []helixUser{
+			{ID: "1", Login: "shroud", DisplayName: "Shroud"},
+			{ID: "2", Login: "xqc", DisplayName: "xQc"},
+		},
+	}
+	c, _ := newTestClient(t, f)
+
+	names, err := c.ResolveUsers(context.Background(), []string{"Shroud", "shroud", "ghost"})
+	if err != nil {
+		t.Fatalf("ResolveUsers returned error: %v", err)
+	}
+	if names["shroud"] != "Shroud" {
+		t.Fatalf("expected shroud -> Shroud, got %q", names["shroud"])
+	}
+	if names["xqc"] != "" {
+		// xqc wasn't queried: not in this call's input.
+		t.Fatalf("expected no xqc entry, got %q", names["xqc"])
+	}
+	if _, ok := names["ghost"]; ok {
+		t.Fatal("expected unresolvable id to be absent")
+	}
+}
+
+func TestResolveUsersCachesResults(t *testing.T) {
+	f := &fakeHelix{
+		usersData: []helixUser{
+			{ID: "1", Login: "shroud", DisplayName: "Shroud"},
+			{ID: "2", Login: "stronghold", DisplayName: "stronghole"},
+		},
+	}
+	c, _ := newTestClient(t, f)
+
+	if _, err := c.ResolveUsers(context.Background(), []string{"shroud", "stronghold"}); err != nil {
+		t.Fatalf("first ResolveUsers: %v", err)
+	}
+	if _, err := c.ResolveUsers(context.Background(), []string{"shroud", "stronghold"}); err != nil {
+		t.Fatalf("second ResolveUsers: %v", err)
+	}
+
+	f.mu.Lock()
+	calls := f.usersCalls
+	f.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected 1 users call (cached), got %d", calls)
+	}
+}
+
+func TestResolveUsersCacheRevalidatesAfterTTL(t *testing.T) {
+	f := &fakeHelix{
+		usersData: []helixUser{{ID: "1", Login: "shroud", DisplayName: "Shroud"}},
+	}
+	c, _ := newTestClient(t, f)
+
+	if _, err := c.ResolveUsers(context.Background(), []string{"shroud"}); err != nil {
+		t.Fatalf("first ResolveUsers: %v", err)
+	}
+
+	c.usersMu.Lock()
+	entry := c.userCache["shroud"]
+	entry.fetchedAt = entry.fetchedAt.Add(-(userCacheTTL + time.Hour))
+	c.userCache["shroud"] = entry
+	c.usersMu.Unlock()
+
+	if _, err := c.ResolveUsers(context.Background(), []string{"shroud"}); err != nil {
+		t.Fatalf("second ResolveUsers: %v", err)
+	}
+
+	f.mu.Lock()
+	calls := f.usersCalls
+	f.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("expected 2 users calls after TTL expiry, got %d", calls)
 	}
 }
 

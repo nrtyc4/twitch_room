@@ -104,6 +104,12 @@ type StreamEnricher interface {
 	LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error)
 }
 
+// UserResolver resolves user IDs to human-readable display names. It is
+// optional: entries whose name cannot be resolved keep their raw user ID.
+type UserResolver interface {
+	ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error)
+}
+
 type Repository interface {
 	UpsertUserWatchState(userID string, streams []Stream, updatedAt time.Time) (UserWatchState, error)
 	GetUserWatchState(userID string) (UserWatchState, bool)
@@ -395,6 +401,22 @@ func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
 	})
+
+	// Populate human-readable publisher names when the enricher can resolve
+	// them; failures degrade to the raw user ID. A partially resolved map is
+	// still applied.
+	if resolver, ok := s.enricher.(UserResolver); ok && len(entries) > 0 {
+		ids := make([]string, 0, len(entries))
+		for _, e := range entries {
+			ids = append(ids, e.UserID)
+		}
+		names, _ := resolver.ResolveUsers(context.Background(), ids)
+		for i := range entries {
+			if name, ok := names[strings.ToLower(entries[i].UserID)]; ok && name != "" {
+				entries[i].DisplayName = name
+			}
+		}
+	}
 
 	return entries
 }

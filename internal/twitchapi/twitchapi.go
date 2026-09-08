@@ -19,6 +19,8 @@ const (
 	apiBase        = "https://api.twitch.tv/helix"
 	tokenEndpoint  = "https://id.twitch.tv/oauth2/token"
 	tokenBufferSec = 60
+	usersChunkSize = 100
+	userCacheTTL   = 15 * time.Minute
 )
 
 // Client is a Twitch Helix API client used to enrich published streams.
@@ -33,6 +35,14 @@ type Client struct {
 	tokenMu   sync.Mutex
 	token     string
 	expiresAt time.Time
+
+	usersMu   sync.Mutex
+	userCache map[string]userCacheEntry
+}
+
+type userCacheEntry struct {
+	displayName string
+	fetchedAt   time.Time
 }
 
 // NewClient creates a Helix client for app-level (client credentials) auth.
@@ -43,6 +53,7 @@ func NewClient(clientID, clientSecret string) *Client {
 		httpClient:    &http.Client{Timeout: 10 * time.Second},
 		apiBase:       apiBase,
 		tokenEndpoint: tokenEndpoint,
+		userCache:     make(map[string]userCacheEntry),
 	}
 }
 
@@ -261,6 +272,63 @@ func sizedThumbnail(template string) string {
 		return ""
 	}
 	return strings.NewReplacer("{width}", "320", "{height}", "180").Replace(template)
+}
+
+// ResolveUsers returns the Twitch display name for each supplied user ID
+// (assumed to be a channel login), keyed by lowercase login. Unknown or
+// unresolvable IDs are absent from the map. Results are cached for the TTL so
+// repeated feed reads do not hammer the users endpoint, and lookups are
+// chunked to Helix's per-request filter limit.
+func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
+	unique := dedupeLogins(userIDs)
+	if len(unique) == 0 {
+		return map[string]string{}, nil
+	}
+	now := time.Now()
+
+	out := make(map[string]string, len(unique))
+
+	c.usersMu.Lock()
+	var missing []string
+	for _, id := range unique {
+		if entry, ok := c.userCache[id]; ok && now.Sub(entry.fetchedAt) < userCacheTTL {
+			if entry.displayName != "" {
+				out[id] = entry.displayName
+			}
+			continue
+		}
+		missing = append(missing, id)
+	}
+	c.usersMu.Unlock()
+
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	for i := 0; i < len(missing); i += usersChunkSize {
+		end := i + usersChunkSize
+		if end > len(missing) {
+			end = len(missing)
+		}
+		users, err := c.fetchUsers(ctx, missing[i:end])
+		if err != nil {
+			// Return whatever was already resolved; the caller degrades to
+			// raw IDs for the rest.
+			return out, err
+		}
+		c.usersMu.Lock()
+		for _, id := range missing[i:end] {
+			c.userCache[id] = userCacheEntry{fetchedAt: now}
+		}
+		for _, u := range users {
+			key := strings.ToLower(u.Login)
+			c.userCache[key] = userCacheEntry{displayName: u.DisplayName, fetchedAt: now}
+			out[key] = u.DisplayName
+		}
+		c.usersMu.Unlock()
+	}
+
+	return out, nil
 }
 
 func dedupeLogins(logins []string) []string {
