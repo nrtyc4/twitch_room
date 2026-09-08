@@ -34,10 +34,12 @@ type server struct {
 	authMiddleware     *auth.Middleware
 	identityProvider   identity.Provider
 	rateLimiter        *security.RateLimiter
+	authLimiter        *security.RateLimiter
 	watchStateCache    *performance.WatchStateCache
 	oauthStates        *oauthStateStore
 	sessions           *sessionStore
 	redirectAfterLogin string
+	trustProxy         bool
 }
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
@@ -94,6 +96,10 @@ func main() {
 	log.Printf("Secrets loaded: %s", sec)
 
 	cfg := config.Load()
+
+	if cfg.AllowDevAuth && cfg.AppEnv == "production" {
+		log.Fatal("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
+	}
 
 	var store repository.WatchStateStore
 
@@ -175,10 +181,16 @@ func main() {
 		authMiddleware:     &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
 		identityProvider:   identityProvider,
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
+		authLimiter:        security.NewRateLimiter(20, time.Minute),
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
 		sessions:           sessions,
 		redirectAfterLogin: cfg.RedirectAfterLogin,
+		trustProxy:         cfg.TrustProxyHeaders,
+	}
+
+	if cfg.SecureCookies {
+		s.sessions.enableSecureCookies()
 	}
 
 	mux := http.NewServeMux()
@@ -203,7 +215,59 @@ func main() {
 	mux.Handle("/", webHandler)
 
 	log.Printf("twitch-room service starting on :%s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, withLogging(mux)); err != nil {
+
+	// Middleware chain: HTTPS enforcement (when TLS is on), security headers,
+	// response logging, and a global cap on request bodies.
+	var handler http.Handler = withLogging(mux)
+	handler = security.MaxBodyBytes(1 << 20)(handler)
+	handler = security.SecurityHeaders(cfg.TLSEnabled)(handler)
+	if cfg.TLSEnabled {
+		handler = security.ForceHTTPS(cfg.TrustProxyHeaders)(handler)
+	}
+
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+
+	if !cfg.TLSEnabled {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("server failed: %v", err)
+		}
+		return
+	}
+
+	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+		log.Fatal("TLS_ENABLED is true but TLS_CERT_FILE / TLS_KEY_FILE are not set")
+	}
+
+	// Optionally keep a plain-HTTP redirector running alongside the HTTPS
+	// listener (e.g. :80 -> :443) for users connecting without a reverse proxy.
+	if cfg.TLSPort != "" {
+		redirector := &http.Server{
+			Addr: ":" + cfg.TLSPort,
+			Handler: security.ForceHTTPS(true)(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, "https://"+r.Host+r.URL.Path, http.StatusMovedPermanently)
+				}),
+			),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		go func() {
+			log.Printf("http->https redirector starting on :%s", cfg.TLSPort)
+			if err := redirector.ListenAndServe(); err != nil {
+				log.Printf("redirector failed: %v", err)
+			}
+		}()
+	}
+
+	if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -215,6 +279,21 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// decodeJSON decodes a JSON request body into dst. Bodies that exceed the
+// global size limit are answered with 413; malformed JSON gets a 400.
+func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+			return false
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return false
+	}
+	return true
 }
 
 func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -272,8 +351,7 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload watchRequest
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+	if !s.decodeJSON(w, r, &payload) {
 		return
 	}
 
@@ -396,8 +474,7 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload service.PublisherSettings
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+	if !s.decodeJSON(w, r, &payload) {
 		return
 	}
 	payload.UserID = userID
@@ -554,6 +631,10 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.rateLimitByIP(w, r) {
+		return
+	}
+
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		state = randomState()
@@ -576,6 +657,10 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	if !s.rateLimitByIP(w, r) {
 		return
 	}
 
@@ -640,10 +725,25 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.rateLimitByIP(w, r) {
+		return
+	}
+
 	if s.sessions != nil {
 		s.sessions.destroySessionCookie(w, r)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rateLimitByIP applies the auth endpoint rate limit keyed by client IP.
+// Both the login and callback endpoints trigger outbound calls to Twitch, so
+// they are throttled independently of per-user API limits.
+func (s *server) rateLimitByIP(w http.ResponseWriter, r *http.Request) bool {
+	if s.authLimiter != nil && !s.authLimiter.Allow(security.ClientIP(r, s.trustProxy)) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+		return false
+	}
+	return true
 }
 
 func (s *server) requireUser(r *http.Request) (string, bool) {

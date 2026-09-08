@@ -21,8 +21,9 @@ This is the production-safe approach the service aims to use:
 - Other users see a watch state only if the publisher allows it: it is public to everyone, visible to approved subscribers, or private.
 - Subscriptions are `open` (anyone can subscribe instantly) or `approved` (subscribe requests must be accepted by the publisher).
 - Feed visibility is opt-in and not globally public by default.
-- HTTPS is required in production.
-- Rate limiting, secret management, and expiry windows should be added before public deployment.
+- HTTPS in production: the service can serve TLS directly or sit behind a reverse proxy; session cookies are Secure and HttpOnly, and a strict Content-Security-Policy, `nosniff`, frame-denial and HSTS headers are applied.
+- Rate limiting: per-user API limits plus per-IP limits on the OAuth endpoints; all request bodies are capped and the HTTP server enforces read/write timeouts.
+- `ALLOW_DEV_AUTH` (the `X-User-ID` shortcut) is intended for local development only and refuses to be used with `APP_ENV=production`.
 
 ## Production Deployment (Docker Compose)
 
@@ -56,14 +57,22 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 | `APP_REDIRECT_AFTER_LOGIN` | Post-login URL in the app | `/` | No | Browser is redirected here with `?user_id=...` after OAuth. |
 | `WATCH_REFRESH_SECONDS` | How often Twitch metadata is re-resolved for published states | `60` | No | Only active when Twitch enrichment is enabled. Refreshing metadata does not extend a state's lifetime. |
+| `TLS_ENABLED` | Serve HTTPS directly using `TLS_CERT_FILE`/`TLS_KEY_FILE` | `false` | For HTTPS | Enables HSTS and HTTP→HTTPS redirects on the TLS listener. |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | PEM certificate and key paths | (empty) | With `TLS_ENABLED` | Loaded by the HTTPS listener. |
+| `TLS_REDIRECT_PORT` | Optional plain-HTTP port that 301s to HTTPS | (empty) | No | e.g. `80` → HTTPS on `PORT`. |
+| `COOKIE_SECURE` | Force `Secure` on session cookies | `false` | Behind a TLS proxy | Set when TLS terminates at a reverse proxy so cookies are still Secure. |
+| `TRUST_PROXY_HEADERS` | Honour `X-Forwarded-For`/`X-Forwarded-Proto` | `false` | Behind a proxy | Only enable when requests come via a proxy you control. |
+| `APP_ENV` | `production` or empty | (empty) | No | Refuses to start if combined with `ALLOW_DEV_AUTH=true`. |
 
 ## Authentication
 
 Requests to the watch/feed endpoints must be authenticated. The service accepts, in order of precedence:
 
-1. A valid session cookie set after a real Twitch login (`/auth/twitch` → `/auth/twitch/callback`). The callback issues an HttpOnly, SameSite=Lax session cookie; the browser then authenticates automatically. `GET /auth/me` reports the session user, and `POST /auth/logout` destroys the session.
+1. A valid session cookie set after a real Twitch login (`/auth/twitch` → `/auth/twitch/callback`). The callback issues an HttpOnly, SameSite=Lax session cookie (Secure when served over HTTPS or when `COOKIE_SECURE=true`); the browser then authenticates automatically. `GET /auth/me` reports the session user, and `POST /auth/logout` destroys the session.
 2. An `X-User-ID` header with the target user's ID (dev auth). When `TWITCH_ROOM_AUTH_TOKEN` is set, the `X-User-ID` header must also carry a matching `Authorization: Bearer <token>`.
 3. A valid Twitch access token in the `Authorization: Bearer <token>` header, validated against Twitch via the identity provider.
+
+The `/auth/twitch`, `/auth/twitch/callback` and `/auth/logout` endpoints are additionally rate-limited per client IP. All request bodies are capped at 1&nbsp;MB (larger ones get `413`), and the HTTP server sets read/write header timeouts so slow clients cannot hold connections open.
 
 Users can always read or update their own watch state. Everyone reads someone else's watch state only when the publisher's visibility setting allows it and (for `subscribers` visibility) the reader has an active subscription. Subscription mode and visibility are enforced server-side regardless of the headers sent.
 
@@ -91,7 +100,7 @@ To use real Twitch authentication (instead of dev auth), create an application i
     TWITCH_REDIRECT_URI=http://localhost:8080/auth/twitch/callback
     APP_REDIRECT_AFTER_LOGIN=/   # where the browser goes after login
     ```
-4.  Set `ALLOW_DEV_AUTH=false` for production.
+4.  Set `ALLOW_DEV_AUTH=false` for production. (If `APP_ENV=production` is set, the service refuses to start while `ALLOW_DEV_AUTH=true`.)
 
 The login flow is:
 

@@ -64,3 +64,83 @@ func TestLoadReadsEnvironment(t *testing.T) {
 		t.Fatalf("expected redirect after login '/app', got %s", cfg.RedirectAfterLogin)
 	}
 }
+
+func TestLoadHardeningDefaults(t *testing.T) {
+	_ = os.Unsetenv("APP_ENV")
+	_ = os.Unsetenv("TLS_ENABLED")
+	_ = os.Unsetenv("TLS_CERT_FILE")
+	_ = os.Unsetenv("TLS_KEY_FILE")
+	_ = os.Unsetenv("TLS_REDIRECT_PORT")
+	_ = os.Unsetenv("COOKIE_SECURE")
+	_ = os.Unsetenv("TRUST_PROXY_HEADERS")
+
+	cfg := Load()
+	if cfg.AppEnv != "" {
+		t.Fatalf("expected empty AppEnv, got %q", cfg.AppEnv)
+	}
+	if cfg.TLSEnabled {
+		t.Fatal("expected TLS disabled by default")
+	}
+	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" || cfg.TLSPort != "" {
+		t.Fatalf("expected empty TLS paths, got cert=%q key=%q port=%q", cfg.TLSCertFile, cfg.TLSKeyFile, cfg.TLSPort)
+	}
+	if cfg.SecureCookies {
+		t.Fatal("expected SecureCookies false by default")
+	}
+	if cfg.TrustProxyHeaders {
+		t.Fatal("expected TrustProxyHeaders false by default")
+	}
+}
+
+func TestLoadReadsHardeningEnvironment(t *testing.T) {
+	_ = os.Setenv("APP_ENV", "production")
+	_ = os.Setenv("TLS_ENABLED", "true")
+	_ = os.Setenv("TLS_CERT_FILE", "/certs/fullchain.pem")
+	_ = os.Setenv("TLS_KEY_FILE", "/certs/privkey.pem")
+	_ = os.Setenv("TLS_REDIRECT_PORT", "80")
+	_ = os.Setenv("COOKIE_SECURE", "true")
+	_ = os.Setenv("TRUST_PROXY_HEADERS", "true")
+	defer func() {
+		_ = os.Unsetenv("APP_ENV")
+		_ = os.Unsetenv("TLS_ENABLED")
+		_ = os.Unsetenv("TLS_CERT_FILE")
+		_ = os.Unsetenv("TLS_KEY_FILE")
+		_ = os.Unsetenv("TLS_REDIRECT_PORT")
+		_ = os.Unsetenv("COOKIE_SECURE")
+		_ = os.Unsetenv("TRUST_PROXY_HEADERS")
+	}()
+
+	cfg := Load()
+	if cfg.AppEnv != "production" {
+		t.Fatalf("expected AppEnv production, got %q", cfg.AppEnv)
+	}
+	if !cfg.TLSEnabled {
+		t.Fatal("expected TLSEnabled true")
+	}
+	if cfg.TLSCertFile != "/certs/fullchain.pem" || cfg.TLSKeyFile != "/certs/privkey.pem" {
+		t.Fatalf("expected cert/key paths, got %q / %q", cfg.TLSCertFile, cfg.TLSKeyFile)
+	}
+	if cfg.TLSPort != "80" {
+		t.Fatalf("expected TLS redirect port 80, got %q", cfg.TLSPort)
+	}
+	if !cfg.SecureCookies {
+		t.Fatal("expected SecureCookies true")
+	}
+	if !cfg.TrustProxyHeaders {
+		t.Fatal("expected TrustProxyHeaders true")
+	}
+}
+
+func TestLoadIgnoresMalformedBools(t *testing.T) {
+	_ = os.Setenv("COOKIE_SECURE", "not-a-bool")
+	_ = os.Setenv("TLS_ENABLED", "maybe")
+	defer func() {
+		_ = os.Unsetenv("COOKIE_SECURE")
+		_ = os.Unsetenv("TLS_ENABLED")
+	}()
+
+	cfg := Load()
+	if cfg.SecureCookies || cfg.TLSEnabled {
+		t.Fatal("expected malformed bools to parse as false")
+	}
+}

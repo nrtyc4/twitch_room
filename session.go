@@ -29,8 +29,16 @@ type sessionBackend interface {
 // sessionStore issues opaque session tokens after a successful Twitch OAuth
 // login and keeps the mapping between a token and its user.
 type sessionStore struct {
-	backend sessionBackend
-	timeout time.Duration
+	backend       sessionBackend
+	timeout       time.Duration
+	secureCookies bool
+}
+
+// enableSecureCookies forces the Secure flag on issued session cookies even
+// when the request did not arrive over a TLS connection. Use this when TLS is
+// terminated by a reverse proxy in front of the service.
+func (s *sessionStore) enableSecureCookies() {
+	s.secureCookies = true
 }
 
 func newSessionStore(timeout time.Duration) *sessionStore {
@@ -156,7 +164,7 @@ func (s *sessionStore) setSessionCookie(w http.ResponseWriter, r *http.Request, 
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || s.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(s.timeout),
 	})
