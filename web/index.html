@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twitch Room</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Twitch Room</h1>
+  <div class="identity">
+    <label for="user-id">Signed in as</label>
+    <input id="user-id" type="text" placeholder="your user id" autocomplete="off">
+    <button id="identity-set" type="button">Use</button>
+    <a id="twitch-login" href="/auth/twitch">Login with Twitch</a>
+  </div>
+</header>
+
+<nav>
+  <button class="tab active" data-tab="feed">Feed</button>
+  <button class="tab" data-tab="watch">My watch</button>
+  <button class="tab" data-tab="people">People</button>
+  <button class="tab" data-tab="requests">Requests</button>
+  <button class="tab" data-tab="settings">Settings</button>
+</nav>
+
+<main>
+  <section id="tab-feed" class="panel active">
+    <h2>Feed</h2>
+    <p class="hint">Only publishers you follow with an active subscription appear here.</p>
+    <div id="feed" class="cards"></div>
+  </section>
+
+  <section id="tab-watch" class="panel">
+    <h2>My watch</h2>
+    <p class="hint">Stream URLs or IDs, one per line. Uses your current identity.</p>
+    <textarea id="watch-input" rows="4" placeholder="https://www.twitch.tv/someone&#10;another-channel"></textarea>
+    <div class="actions">
+      <button id="watch-save" type="button">Publish</button>
+      <button id="watch-clear" type="button" class="secondary">Stop watching</button>
+    </div>
+    <div id="watch-current" class="box"></div>
+  </section>
+
+  <section id="tab-people" class="panel">
+    <h2>People</h2>
+    <div class="follow-row">
+      <input id="follow-input" type="text" placeholder="user id to follow" autocomplete="off">
+      <button id="follow-btn" type="button">Follow</button>
+    </div>
+    <h3>Following</h3>
+    <div id="following" class="cards"></div>
+  </section>
+
+  <section id="tab-requests" class="panel">
+    <h2>Subscription requests</h2>
+    <p class="hint">Users who asked to follow you and are waiting for approval.</p>
+    <div id="requests" class="cards"></div>
+  </section>
+
+  <section id="tab-settings" class="panel">
+    <h2>Settings</h2>
+    <label for="setting-mode">Subscription mode</label>
+    <select id="setting-mode">
+      <option value="open">Open - anyone can follow instantly</option>
+      <option value="approved">Approved - requests need my approval</option>
+    </select>
+    <label for="setting-visibility">Watch visibility</label>
+    <select id="setting-visibility">
+      <option value="public">Public - anyone signed in can see</option>
+      <option value="subscribers">Subscribers - only my followers see</option>
+      <option value="private">Private - nobody sees my watch</option>
+    </select>
+    <button id="settings-save" type="button">Save</button>
+    <div id="settings-status" class="box"></div>
+  </section>
+</main>
+
+<div id="error" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

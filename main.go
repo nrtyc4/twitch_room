@@ -151,6 +151,12 @@ func main() {
 	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 
+	webHandler, err := newWebHandler()
+	if err != nil {
+		log.Fatalf("failed to init web handler: %v", err)
+	}
+	mux.Handle("/", webHandler)
+
 	log.Printf("twitch-room service starting on :%s", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, withLogging(mux)); err != nil {
 		log.Fatalf("server failed: %v", err)
@@ -174,6 +180,20 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.rateLimiter.Allow(userID) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		if err := s.watchService.ClearUserWatchState(userID); err != nil {
+			if errors.Is(err, service.ErrUserNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "watch state not found"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.watchStateCache.Invalidate(userID)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 

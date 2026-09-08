@@ -94,15 +94,29 @@ To use real Twitch authentication (instead of dev auth), create an application i
 The login flow is:
 
 - `GET /auth/twitch` redirects the browser to Twitch's authorization page.
-- After the user authorizes, Twitch redirects back to `/auth/twitch/callback?code=...&state=...`. The service exchanges the code for an access token, resolves the Twitch user, and redirects the browser to `APP_REDIRECT_AFTER_LOGIN?user_id=<login>`.
+- After the user authorizes, Twitch redirects back to `/auth/twitch/callback?code=...&state=...`. The service exchanges the code for an access token, resolves the Twitch user, and redirects the browser to `APP_REDIRECT_AFTER_LOGIN?user_id=<login>` (the web UI reads this and remembers it).
 - The client then authenticates subsequent API calls with that `user_id` (see Authentication below).
 
 The `state` parameter is stored server-side at the start of the flow and verified on the callback to prevent CSRF.
+
+## Web UI
+
+The service ships a small embedded single-page app (no build step, no external CDNs). Open the service root in a browser (`http://localhost:8080/` when running locally or via Docker):
+
+- **Identity:** the bar at the top accepts a user id directly (dev auth) or you can start the real flow with **Login with Twitch**, which redirects back to `/` with the resolved `user_id` in the query string.
+- **My watch:** publish or clear the streams you are currently viewing (raw channel names or full `twitch.tv` URLs).
+- **Feed:** shows watch state from publishers you follow with an active subscription, auto-refreshing.
+- **People:** follow/unfollow other users by id.
+- **Requests:** approve or reject pending subscribe requests when you run `approved` mode.
+- **Settings:** choose `open`/`approved` subscription mode and `public`/`subscribers`/`private` visibility.
+
+The UI authenticates with the `X-User-ID` header. In real deployments that trust Twitch OAuth but not raw user ids, a session-cookie flow will be needed before this UI is production-safe.
 
 ## API
 
 - `GET /health`
 - `POST /v1/watch` — publish the streams you are currently watching
+- `DELETE /v1/watch` — stop watching (clears your published watch state)
 - `GET /v1/users/{user_id}/watch` — read a user's watch state (self, public publishers, or active subscribers)
 - `GET /v1/feed` — feed of active subscriptions
 - `GET|PUT /v1/settings` — read or update `subscription_mode` and `visibility`

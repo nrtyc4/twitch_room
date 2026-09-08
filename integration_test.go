@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -547,6 +548,49 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	}
 
 	t.Logf("Subscription modes integration test passed")
+}
+
+// TestIntegrationWebUI tests that the embedded SPA and static assets are served.
+func TestIntegrationWebUI(t *testing.T) {
+	webHandler, err := newWebHandler()
+	if err != nil {
+		t.Fatalf("newWebHandler failed: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", webHandler)
+
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	// The SPA entry point is served at the root.
+	resp, _ := http.Get(testServer.URL + "/")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for /, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "Twitch Room") {
+		t.Fatalf("expected the SPA entry point to mention Twitch Room")
+	}
+
+	// Static assets are served under /static/.
+	for _, path := range []string{"/static/app.js", "/static/style.css"} {
+		assetResp, _ := http.Get(testServer.URL + path)
+		if assetResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d", path, assetResp.StatusCode)
+		}
+		assetResp.Body.Close()
+	}
+
+	// Unknown API paths get a JSON 404, not the SPA.
+	apiResp, _ := http.Get(testServer.URL + "/v1/nonexistent")
+	if apiResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown API path, got %d", apiResp.StatusCode)
+	}
+	apiResp.Body.Close()
+
+	t.Logf("Web UI integration test passed")
 }
 
 // stubProvider is a minimal identity.Provider for wiring tests.
