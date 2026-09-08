@@ -136,3 +136,12 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 ## Notes
 
 The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. OAuth session tokens are stored in the database too, so sessions survive a restart and work across multiple instances (memory sessions are used when no database is configured).
+
+## Running the tests
+
+`go test ./...` runs fully offline against in-memory stores. The repository package also ships Postgres-backed tests that exercise the real storage layer; they skip automatically unless a database is available. To run them, point `TEST_DATABASE_DSN` (falls back to `DATABASE_DSN`) at a database you don't mind getting rows written to the tables for (every test cleans up after itself):
+
+```bash
+TEST_DATABASE_DSN="postgres://twitch_room:twitch_room@localhost:5432/twitch_room?sslmode=disable" \
+  go test ./internal/repository/ -run Postgres -v
+```
