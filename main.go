@@ -28,12 +28,12 @@ type watchRequest struct {
 }
 
 type server struct {
-	watchService     *service.Service
-	authMiddleware   *auth.Middleware
-	identityProvider identity.Provider
-	rateLimiter      *security.RateLimiter
-	watchStateCache  *performance.WatchStateCache
-	oauthStates      *oauthStateStore
+	watchService       *service.Service
+	authMiddleware     *auth.Middleware
+	identityProvider   identity.Provider
+	rateLimiter        *security.RateLimiter
+	watchStateCache    *performance.WatchStateCache
+	oauthStates        *oauthStateStore
 	redirectAfterLogin string
 }
 
@@ -143,6 +143,11 @@ func main() {
 	mux.HandleFunc("/v1/watch", s.handleWatch)
 	mux.HandleFunc("/v1/users/", s.handleUserWatch)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
+	mux.HandleFunc("/v1/settings", s.handleSettings)
+	mux.HandleFunc("/v1/subscriptions", s.handleSubscriptions)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
+	mux.HandleFunc("/v1/subscription_requests", s.handleSubscriptionRequests)
+	mux.HandleFunc("/v1/subscription_requests/", s.handleSubscriptionRequestAction)
 	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 
@@ -242,8 +247,13 @@ func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pathUserID != userID {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you can only view your own watch state"})
+	canView, err := s.watchService.CanView(userID, pathUserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !canView {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you are not allowed to view this watch state"})
 		return
 	}
 
@@ -290,8 +300,183 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	feed := s.watchService.ListFeed(20)
+	feed := s.watchService.ListFeed(userID, 20)
 	writeJSON(w, http.StatusOK, feed)
+}
+
+func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		settings, err := s.watchService.GetPublisherSettings(userID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+		return
+	}
+
+	if r.Method != http.MethodPut && r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var payload service.PublisherSettings
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	payload.UserID = userID
+
+	settings, err := s.watchService.UpdatePublisherSettings(payload)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidSettings) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "subscription_mode must be 'open' or 'approved' and visibility must be 'public', 'subscribers' or 'private'"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	subs, err := s.watchService.ListSubscriptions(userID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, subs)
+}
+
+func (s *server) handleSubscription(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	publisherID := strings.TrimPrefix(r.URL.Path, "/v1/subscriptions/")
+	publisherID = strings.TrimSpace(publisherID)
+	if publisherID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing publisher id"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		sub, err := s.watchService.Subscribe(userID, publisherID)
+		if err != nil {
+			if errors.Is(err, service.ErrCannotSubscribeToSelf) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "you cannot subscribe to yourself"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		status := http.StatusCreated
+		if sub.Status == service.SubscriptionStatusPending {
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, sub)
+	case http.MethodDelete:
+		if err := s.watchService.Unsubscribe(userID, publisherID); err != nil {
+			if errors.Is(err, service.ErrNotSubscribed) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "not subscribed"})
+				return
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *server) handleSubscriptionRequests(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	requests, err := s.watchService.ListPendingRequests(userID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, requests)
+}
+
+func (s *server) handleSubscriptionRequestAction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/subscription_requests/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expected /v1/subscription_requests/{user_id}/{approve|reject}"})
+		return
+	}
+	subscriberID := strings.TrimSpace(parts[0])
+	action := strings.TrimSpace(parts[1])
+
+	var approve bool
+	switch action {
+	case "approve":
+		approve = true
+	case "reject":
+		approve = false
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'approve' or 'reject'"})
+		return
+	}
+
+	if err := s.watchService.RespondToSubscriber(userID, subscriberID, approve); err != nil {
+		if errors.Is(err, service.ErrNotSubscribed) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "subscription not found"})
+			return
+		}
+		if errors.Is(err, service.ErrNoPendingRequest) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "no pending subscription request"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {

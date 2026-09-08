@@ -54,6 +54,22 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 		created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_updated_at ON user_watch_state(updated_at DESC);
+
+	CREATE TABLE IF NOT EXISTS publisher_settings (
+		user_id TEXT PRIMARY KEY,
+		subscription_mode TEXT NOT NULL DEFAULT 'open',
+		visibility TEXT NOT NULL DEFAULT 'subscribers'
+	);
+
+	CREATE TABLE IF NOT EXISTS subscriptions (
+		subscriber_id TEXT NOT NULL,
+		publisher_id TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (subscriber_id, publisher_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_subscriptions_publisher ON subscriptions(publisher_id, status);
+	CREATE INDEX IF NOT EXISTS idx_subscriptions_subscriber ON subscriptions(subscriber_id);
 	`
 
 	_, err := ps.db.ExecContext(ctx, schema)
@@ -158,6 +174,127 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 func (ps *PostgresStore) Delete(userID string) {
 	query := `DELETE FROM user_watch_state WHERE user_id = $1`
 	ps.db.Exec(query, userID)
+}
+
+// SetPublisherSettings inserts or updates a publisher's settings.
+func (ps *PostgresStore) SetPublisherSettings(settings service.PublisherSettings) error {
+	query := `
+	INSERT INTO publisher_settings (user_id, subscription_mode, visibility)
+	VALUES ($1, $2, $3)
+	ON CONFLICT (user_id) DO UPDATE SET
+		subscription_mode = EXCLUDED.subscription_mode,
+		visibility = EXCLUDED.visibility
+	`
+	_, err := ps.db.Exec(query, settings.UserID, settings.SubscriptionMode, settings.Visibility)
+	if err != nil {
+		return fmt.Errorf("set publisher settings failed: %w", err)
+	}
+	return nil
+}
+
+// GetPublisherSettings retrieves a publisher's settings.
+func (ps *PostgresStore) GetPublisherSettings(userID string) (service.PublisherSettings, bool) {
+	query := `SELECT user_id, subscription_mode, visibility FROM publisher_settings WHERE user_id = $1`
+
+	var settings service.PublisherSettings
+	err := ps.db.QueryRow(query, userID).
+		Scan(&settings.UserID, &settings.SubscriptionMode, &settings.Visibility)
+
+	if err != nil {
+		return service.PublisherSettings{}, false
+	}
+	return settings, true
+}
+
+// UpsertSubscription inserts or updates a subscription between two users.
+func (ps *PostgresStore) UpsertSubscription(sub service.Subscription) error {
+	query := `
+	INSERT INTO subscriptions (subscriber_id, publisher_id, status, created_at)
+	VALUES ($1, $2, $3, $4)
+	ON CONFLICT (subscriber_id, publisher_id) DO UPDATE SET
+		status = EXCLUDED.status
+	`
+	_, err := ps.db.Exec(query, sub.SubscriberID, sub.PublisherID, sub.Status, sub.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert subscription failed: %w", err)
+	}
+	return nil
+}
+
+// GetSubscription retrieves a subscription between a subscriber and publisher.
+func (ps *PostgresStore) GetSubscription(subscriberID, publisherID string) (service.Subscription, bool) {
+	query := `SELECT subscriber_id, publisher_id, status, created_at FROM subscriptions WHERE subscriber_id = $1 AND publisher_id = $2`
+
+	var sub service.Subscription
+	err := ps.db.QueryRow(query, subscriberID, publisherID).
+		Scan(&sub.SubscriberID, &sub.PublisherID, &sub.Status, &sub.CreatedAt)
+
+	if err != nil {
+		return service.Subscription{}, false
+	}
+	return sub, true
+}
+
+// ListSubscriptionsForSubscriber returns all subscriptions created by a subscriber.
+func (ps *PostgresStore) ListSubscriptionsForSubscriber(subscriberID string) []service.Subscription {
+	query := `
+	SELECT subscriber_id, publisher_id, status, created_at
+	FROM subscriptions
+	WHERE subscriber_id = $1
+	ORDER BY created_at DESC
+	`
+
+	return ps.querySubscriptions(query, subscriberID)
+}
+
+// ListSubscriptionsForPublisher returns subscriptions to a publisher matching a status.
+func (ps *PostgresStore) ListSubscriptionsForPublisher(publisherID string, status service.SubscriptionStatus) []service.Subscription {
+	query := `
+	SELECT subscriber_id, publisher_id, status, created_at
+	FROM subscriptions
+	WHERE publisher_id = $1 AND status = $2
+	ORDER BY created_at DESC
+	`
+
+	return ps.querySubscriptions(query, publisherID, status)
+}
+
+// SetSubscriptionStatus updates the status of a subscription.
+func (ps *PostgresStore) SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error {
+	query := `UPDATE subscriptions SET status = $3 WHERE subscriber_id = $1 AND publisher_id = $2`
+	result, err := ps.db.Exec(query, subscriberID, publisherID, status)
+	if err != nil {
+		return fmt.Errorf("set subscription status failed: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err == nil && affected == 0 {
+		return service.ErrNotSubscribed
+	}
+	return nil
+}
+
+// DeleteSubscription removes a subscription.
+func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) {
+	query := `DELETE FROM subscriptions WHERE subscriber_id = $1 AND publisher_id = $2`
+	ps.db.Exec(query, subscriberID, publisherID)
+}
+
+func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) []service.Subscription {
+	rows, err := ps.db.Query(query, args...)
+	if err != nil {
+		return []service.Subscription{}
+	}
+	defer rows.Close()
+
+	subs := make([]service.Subscription, 0)
+	for rows.Next() {
+		var sub service.Subscription
+		if err := rows.Scan(&sub.SubscriberID, &sub.PublisherID, &sub.Status, &sub.CreatedAt); err != nil {
+			continue
+		}
+		subs = append(subs, sub)
+	}
+	return subs
 }
 
 // Close closes the database connection.

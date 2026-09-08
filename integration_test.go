@@ -76,17 +76,18 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/watch", s.handleWatch)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
 
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
 
-	// Test 1: User sets watch state via dev auth
+	// Test 1: Publisher sets watch state via dev auth
 	reqBody := watchRequest{StreamIDs: []string{"stream-123", "stream-456"}}
 	body, _ := json.Marshal(reqBody)
 
 	req, _ := http.NewRequest("POST", testServer.URL+"/v1/watch", bytes.NewReader(body))
-	req.Header.Set("X-User-ID", "dev-user")
+	req.Header.Set("X-User-ID", "publisher-user")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, _ := http.DefaultClient.Do(req)
@@ -94,7 +95,15 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 		t.Fatalf("expected 201, got %d", resp.StatusCode)
 	}
 
-	// Test 2: Verify watch state was stored
+	// Test 2: Subscriber subscribes to the publisher
+	reqSub, _ := http.NewRequest("POST", testServer.URL+"/v1/subscriptions/publisher-user", nil)
+	reqSub.Header.Set("X-User-ID", "dev-user")
+	respSub, _ := http.DefaultClient.Do(reqSub)
+	if respSub.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 for subscribe, got %d", respSub.StatusCode)
+	}
+
+	// Test 3: Verify watch state is visible in the subscriber's feed
 	req2, _ := http.NewRequest("GET", testServer.URL+"/v1/feed", nil)
 	req2.Header.Set("X-User-ID", "dev-user")
 
@@ -129,6 +138,7 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/watch", s.handleWatch)
 	mux.HandleFunc("/v1/users/", s.handleUserWatch)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
 
 	testServer := httptest.NewServer(mux)
@@ -154,7 +164,14 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 		t.Fatalf("user2 watch failed: %d", resp2.StatusCode)
 	}
 
-	// Test 3: Verify feed shows both users
+	// Test 3: User1 subscribes to user2, then verifies the feed shows it
+	reqSub, _ := http.NewRequest("POST", testServer.URL+"/v1/subscriptions/user2", nil)
+	reqSub.Header.Set("X-User-ID", "user1")
+	respSub, _ := http.DefaultClient.Do(reqSub)
+	if respSub.StatusCode != http.StatusCreated {
+		t.Fatalf("subscribe user1->user2 failed: %d", respSub.StatusCode)
+	}
+
 	reqFeed, _ := http.NewRequest("GET", testServer.URL+"/v1/feed", nil)
 	reqFeed.Header.Set("X-User-ID", "user1")
 	respFeed, _ := http.DefaultClient.Do(reqFeed)
@@ -162,8 +179,8 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 	var feedResp []map[string]interface{}
 	json.NewDecoder(respFeed.Body).Decode(&feedResp)
 
-	if len(feedResp) != 2 {
-		t.Fatalf("expected 2 users in feed, got %d", len(feedResp))
+	if len(feedResp) != 1 || feedResp[0]["user_id"] != "user2" {
+		t.Fatalf("expected 1 user (user2) in feed, got %v", feedResp)
 	}
 
 	// Test 4: User can read their own watch state via /v1/users/{id}/watch
@@ -182,13 +199,22 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 		t.Fatalf("expected own user_id 'user1', got %v", ownState["user_id"])
 	}
 
-	// Test 5: User cannot read another user's watch state via /v1/users/{id}/watch
-	reqOther, _ := http.NewRequest("GET", testServer.URL+"/v1/users/user2/watch", nil)
-	reqOther.Header.Set("X-User-ID", "user1")
-	respOther, _ := http.DefaultClient.Do(reqOther)
+	// Test 5: An active subscriber can read another user's watch state
+	reqSubView, _ := http.NewRequest("GET", testServer.URL+"/v1/users/user2/watch", nil)
+	reqSubView.Header.Set("X-User-ID", "user1")
+	respSubView, _ := http.DefaultClient.Do(reqSubView)
 
-	if respOther.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 reading another user's watch state, got %d", respOther.StatusCode)
+	if respSubView.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 reading subscribed user's watch state, got %d", respSubView.StatusCode)
+	}
+
+	// Test 6: A stranger (unsubscribed) cannot read another user's watch state
+	reqStranger, _ := http.NewRequest("GET", testServer.URL+"/v1/users/user2/watch", nil)
+	reqStranger.Header.Set("X-User-ID", "stranger")
+	respStranger, _ := http.DefaultClient.Do(reqStranger)
+
+	if respStranger.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 reading another user's watch state, got %d", respStranger.StatusCode)
 	}
 
 	t.Logf("Watch state integration test passed")
@@ -318,6 +344,7 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/watch", s.handleWatch)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
 
 	testServer := httptest.NewServer(mux)
@@ -351,7 +378,29 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 		t.Fatalf("expected 3 streams, got %v", len(setResp["stream_ids"].([]interface{})))
 	}
 
-	// Step 2: Query feed to verify persistence
+	// Step 2: Publisher sets watch state
+	publisherID := "publisher-user"
+	reqPubBody := watchRequest{StreamIDs: []string{"stream-pub"}}
+	pubBody, _ := json.Marshal(reqPubBody)
+
+	reqPub, _ := http.NewRequest("POST", testServer.URL+"/v1/watch", bytes.NewReader(pubBody))
+	reqPub.Header.Set("X-User-ID", publisherID)
+	reqPub.Header.Set("Content-Type", "application/json")
+
+	respPub, _ := http.DefaultClient.Do(reqPub)
+	if respPub.StatusCode != http.StatusCreated {
+		t.Fatalf("set publisher watch state failed: %d", respPub.StatusCode)
+	}
+
+	// Step 3: Subscriber follows the publisher
+	reqSub, _ := http.NewRequest("POST", testServer.URL+"/v1/subscriptions/"+publisherID, nil)
+	reqSub.Header.Set("X-User-ID", userID)
+	respSub, _ := http.DefaultClient.Do(reqSub)
+	if respSub.StatusCode != http.StatusCreated {
+		t.Fatalf("subscribe failed: %d", respSub.StatusCode)
+	}
+
+	// Step 4: Query feed to verify persistence
 	reqFeed, _ := http.NewRequest("GET", testServer.URL+"/v1/feed", nil)
 	reqFeed.Header.Set("X-User-ID", userID)
 
@@ -364,11 +413,140 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	var feedResp []map[string]interface{}
 	json.Unmarshal(feedRespBody, &feedResp)
 
-	if len(feedResp) != 1 {
-		t.Fatalf("expected 1 user in feed, got %d", len(feedResp))
+	if len(feedResp) != 1 || feedResp[0]["user_id"] != publisherID {
+		t.Fatalf("expected 1 user (publisher) in feed, got %v", feedResp)
 	}
 
 	t.Logf("Full request cycle integration test passed")
+}
+
+// TestIntegrationSubscriptionModes tests the settings, approved-subscription,
+// and rejection flows end-to-end over HTTP.
+func TestIntegrationSubscriptionModes(t *testing.T) {
+	store := repository.NewMemoryStore()
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+
+	s := &server{
+		watchService:    svc,
+		authMiddleware:  &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:     security.NewRateLimiter(100, time.Minute),
+		watchStateCache: performance.NewWatchStateCache(5 * time.Minute),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	mux.HandleFunc("/v1/users/", s.handleUserWatch)
+	mux.HandleFunc("/v1/feed", s.handleFeed)
+	mux.HandleFunc("/v1/settings", s.handleSettings)
+	mux.HandleFunc("/v1/subscriptions", s.handleSubscriptions)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
+	mux.HandleFunc("/v1/subscription_requests", s.handleSubscriptionRequests)
+	mux.HandleFunc("/v1/subscription_requests/", s.handleSubscriptionRequestAction)
+
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	do := func(method, path, userID string, body string) (*http.Response, []byte) {
+		var reader io.Reader
+		if body != "" {
+			reader = bytes.NewReader([]byte(body))
+		}
+		req, _ := http.NewRequest(method, testServer.URL+path, reader)
+		if userID != "" {
+			req.Header.Set("X-User-ID", userID)
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s failed: %v", method, path, err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, data
+	}
+
+	// Step 1: Publisher publishes watch state and switches to approved mode.
+	if resp, _ := do("POST", "/v1/watch", "publisher", `{"stream_ids":["stream-1"]}`); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("publisher watch failed: %d", resp.StatusCode)
+	}
+	if resp, body := do("PUT", "/v1/settings", "publisher", `{"subscription_mode":"approved","visibility":"subscribers"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("update settings failed: %d (%s)", resp.StatusCode, body)
+	}
+
+	// Step 2: Settings are persisted and returned.
+	if resp, body := do("GET", "/v1/settings", "publisher", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("get settings failed: %d", resp.StatusCode)
+	} else {
+		var settings map[string]interface{}
+		json.Unmarshal(body, &settings)
+		if settings["subscription_mode"] != "approved" || settings["visibility"] != "subscribers" {
+			t.Fatalf("unexpected settings: %s", body)
+		}
+	}
+
+	// Step 3: Viewer subscribes; request is pending (202).
+	if resp, _ := do("POST", "/v1/subscriptions/publisher", "viewer", ""); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected 202 pending subscription, got %d", resp.StatusCode)
+	}
+
+	// Step 4: Feed stays empty while pending.
+	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed failed: %d", resp.StatusCode)
+	} else {
+		var feed []map[string]interface{}
+		json.Unmarshal(body, &feed)
+		if len(feed) != 0 {
+			t.Fatalf("expected empty feed while pending, got %v", feed)
+		}
+	}
+
+	// Step 5: Publisher sees the pending request and approves it.
+	if resp, body := do("GET", "/v1/subscription_requests", "publisher", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list requests failed: %d", resp.StatusCode)
+	} else {
+		var requests []map[string]interface{}
+		json.Unmarshal(body, &requests)
+		if len(requests) != 1 || requests[0]["subscriber_id"] != "viewer" {
+			t.Fatalf("unexpected requests: %s", body)
+		}
+	}
+	if resp, _ := do("POST", "/v1/subscription_requests/viewer/approve", "publisher", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("approve failed: %d", resp.StatusCode)
+	}
+
+	// Step 6: Publisher now appears in the viewer's feed.
+	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed failed: %d", resp.StatusCode)
+	} else {
+		var feed []map[string]interface{}
+		json.Unmarshal(body, &feed)
+		if len(feed) != 1 || feed[0]["user_id"] != "publisher" {
+			t.Fatalf("expected publisher in feed after approval, got %v", feed)
+		}
+	}
+
+	// Step 7: Viewer can read the approved publisher's watch state directly.
+	if resp, _ := do("GET", "/v1/users/publisher/watch", "viewer", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 reading approved publisher's watch state, got %d", resp.StatusCode)
+	}
+
+	// Step 8: Unsubscribe removes the publisher from the feed.
+	if resp, _ := do("DELETE", "/v1/subscriptions/publisher", "viewer", ""); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unsubscribe failed: %d", resp.StatusCode)
+	}
+	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed failed: %d", resp.StatusCode)
+	} else {
+		var feed []map[string]interface{}
+		json.Unmarshal(body, &feed)
+		if len(feed) != 0 {
+			t.Fatalf("expected empty feed after unsubscribe, got %v", feed)
+		}
+	}
+
+	t.Logf("Subscription modes integration test passed")
 }
 
 // stubProvider is a minimal identity.Provider for wiring tests.

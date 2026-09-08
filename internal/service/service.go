@@ -9,9 +9,54 @@ import (
 )
 
 var (
-	ErrUserNotFound  = errors.New("user not found")
-	ErrInvalidUser   = errors.New("invalid user")
-	ErrInvalidStream = errors.New("invalid stream id")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrInvalidUser           = errors.New("invalid user")
+	ErrInvalidStream         = errors.New("invalid stream id")
+	ErrInvalidSubscription   = errors.New("invalid subscription")
+	ErrCannotSubscribeToSelf = errors.New("cannot subscribe to yourself")
+	ErrNotSubscribed         = errors.New("not subscribed")
+	ErrNoPendingRequest      = errors.New("no pending subscription request")
+	ErrInvalidSettings       = errors.New("invalid settings")
+)
+
+type SubscriptionMode string
+
+const (
+	SubscriptionModeOpen     SubscriptionMode = "open"
+	SubscriptionModeApproved SubscriptionMode = "approved"
+)
+
+type Visibility string
+
+const (
+	VisibilityPublic      Visibility = "public"
+	VisibilitySubscribers Visibility = "subscribers"
+	VisibilityPrivate     Visibility = "private"
+)
+
+type SubscriptionStatus string
+
+const (
+	SubscriptionStatusActive  SubscriptionStatus = "active"
+	SubscriptionStatusPending SubscriptionStatus = "pending"
+)
+
+type PublisherSettings struct {
+	UserID           string           `json:"user_id"`
+	SubscriptionMode SubscriptionMode `json:"subscription_mode"`
+	Visibility       Visibility       `json:"visibility"`
+}
+
+type Subscription struct {
+	SubscriberID string             `json:"subscriber_id"`
+	PublisherID  string             `json:"publisher_id"`
+	Status       SubscriptionStatus `json:"status"`
+	CreatedAt    time.Time          `json:"created_at"`
+}
+
+const (
+	DefaultSubscriptionMode = SubscriptionModeOpen
+	DefaultVisibility       = VisibilitySubscribers
 )
 
 type Stream struct {
@@ -39,6 +84,16 @@ type Repository interface {
 	GetUserWatchState(userID string) (UserWatchState, bool)
 	ListActiveUsers(limit int) []UserWatchState
 	DeleteUserWatchState(userID string)
+
+	SetPublisherSettings(settings PublisherSettings) error
+	GetPublisherSettings(userID string) (PublisherSettings, bool)
+
+	UpsertSubscription(sub Subscription) error
+	GetSubscription(subscriberID, publisherID string) (Subscription, bool)
+	ListSubscriptionsForSubscriber(subscriberID string) []Subscription
+	ListSubscriptionsForPublisher(publisherID string, status SubscriptionStatus) []Subscription
+	SetSubscriptionStatus(subscriberID, publisherID string, status SubscriptionStatus) error
+	DeleteSubscription(subscriberID, publisherID string)
 }
 
 type Service struct {
@@ -95,15 +150,37 @@ func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
 	return state, nil
 }
 
-func (s *Service) ListFeed(limit int) []FeedEntry {
+func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 	if limit <= 0 {
 		limit = 20
 	}
 
+	subscriptions := s.repo.ListSubscriptionsForSubscriber(viewerID)
 	entries := make([]FeedEntry, 0)
-	for _, state := range s.repo.ListActiveUsers(limit) {
+
+	for _, sub := range subscriptions {
+		if sub.Status != SubscriptionStatusActive {
+			continue
+		}
+
+		state, ok := s.repo.GetUserWatchState(sub.PublisherID)
+		if !ok {
+			continue
+		}
 		if s.isExpired(state.UpdatedAt) {
 			s.repo.DeleteUserWatchState(state.UserID)
+			continue
+		}
+
+		settings, ok := s.repo.GetPublisherSettings(sub.PublisherID)
+		if !ok {
+			settings = PublisherSettings{
+				UserID:           sub.PublisherID,
+				SubscriptionMode: DefaultSubscriptionMode,
+				Visibility:       DefaultVisibility,
+			}
+		}
+		if settings.Visibility == VisibilityPrivate {
 			continue
 		}
 
@@ -121,6 +198,10 @@ func (s *Service) ListFeed(limit int) []FeedEntry {
 			Streams:     streams,
 			UpdatedAt:   state.UpdatedAt,
 		})
+
+		if len(entries) >= limit {
+			break
+		}
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -141,6 +222,155 @@ func (s *Service) ClearUserWatchState(userID string) error {
 
 	s.repo.DeleteUserWatchState(userID)
 	return nil
+}
+
+func (s *Service) UpdatePublisherSettings(settings PublisherSettings) (PublisherSettings, error) {
+	if settings.UserID == "" {
+		return PublisherSettings{}, ErrInvalidUser
+	}
+	if settings.SubscriptionMode != SubscriptionModeOpen && settings.SubscriptionMode != SubscriptionModeApproved {
+		return PublisherSettings{}, ErrInvalidSettings
+	}
+	if settings.Visibility != VisibilityPublic &&
+		settings.Visibility != VisibilitySubscribers &&
+		settings.Visibility != VisibilityPrivate {
+		return PublisherSettings{}, ErrInvalidSettings
+	}
+
+	if err := s.repo.SetPublisherSettings(settings); err != nil {
+		return PublisherSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Service) GetPublisherSettings(userID string) (PublisherSettings, error) {
+	if userID == "" {
+		return PublisherSettings{}, ErrInvalidUser
+	}
+
+	settings, ok := s.repo.GetPublisherSettings(userID)
+	if !ok {
+		return PublisherSettings{
+			UserID:           userID,
+			SubscriptionMode: DefaultSubscriptionMode,
+			Visibility:       DefaultVisibility,
+		}, nil
+	}
+	return settings, nil
+}
+
+func (s *Service) Subscribe(subscriberID, publisherID string) (Subscription, error) {
+	if subscriberID == "" || publisherID == "" {
+		return Subscription{}, ErrInvalidSubscription
+	}
+	if subscriberID == publisherID {
+		return Subscription{}, ErrCannotSubscribeToSelf
+	}
+
+	settings, ok := s.repo.GetPublisherSettings(publisherID)
+	if !ok {
+		settings = PublisherSettings{
+			UserID:           publisherID,
+			SubscriptionMode: DefaultSubscriptionMode,
+			Visibility:       DefaultVisibility,
+		}
+	}
+
+	status := SubscriptionStatusActive
+	if settings.SubscriptionMode == SubscriptionModeApproved {
+		status = SubscriptionStatusPending
+	}
+
+	sub := Subscription{
+		SubscriberID: subscriberID,
+		PublisherID:  publisherID,
+		Status:       status,
+		CreatedAt:    time.Now().UTC(),
+	}
+
+	if err := s.repo.UpsertSubscription(sub); err != nil {
+		return Subscription{}, err
+	}
+	return sub, nil
+}
+
+func (s *Service) Unsubscribe(subscriberID, publisherID string) error {
+	if subscriberID == "" || publisherID == "" {
+		return ErrInvalidSubscription
+	}
+
+	if _, ok := s.repo.GetSubscription(subscriberID, publisherID); !ok {
+		return ErrNotSubscribed
+	}
+
+	s.repo.DeleteSubscription(subscriberID, publisherID)
+	return nil
+}
+
+func (s *Service) ListSubscriptions(subscriberID string) ([]Subscription, error) {
+	if subscriberID == "" {
+		return nil, ErrInvalidUser
+	}
+	return s.repo.ListSubscriptionsForSubscriber(subscriberID), nil
+}
+
+func (s *Service) ListPendingRequests(publisherID string) ([]Subscription, error) {
+	if publisherID == "" {
+		return nil, ErrInvalidUser
+	}
+	return s.repo.ListSubscriptionsForPublisher(publisherID, SubscriptionStatusPending), nil
+}
+
+func (s *Service) RespondToSubscriber(publisherID, subscriberID string, approve bool) error {
+	if publisherID == "" || subscriberID == "" {
+		return ErrInvalidSubscription
+	}
+	if publisherID == subscriberID {
+		return ErrCannotSubscribeToSelf
+	}
+
+	sub, ok := s.repo.GetSubscription(subscriberID, publisherID)
+	if !ok {
+		return ErrNotSubscribed
+	}
+	if sub.Status != SubscriptionStatusPending {
+		return ErrNoPendingRequest
+	}
+
+	if approve {
+		return s.repo.SetSubscriptionStatus(subscriberID, publisherID, SubscriptionStatusActive)
+	}
+
+	s.repo.DeleteSubscription(subscriberID, publisherID)
+	return nil
+}
+
+func (s *Service) CanView(viewerID, publisherID string) (bool, error) {
+	if viewerID == "" || publisherID == "" {
+		return false, ErrInvalidUser
+	}
+	if viewerID == publisherID {
+		return true, nil
+	}
+
+	settings, ok := s.repo.GetPublisherSettings(publisherID)
+	if !ok {
+		settings = PublisherSettings{
+			UserID:           publisherID,
+			SubscriptionMode: DefaultSubscriptionMode,
+			Visibility:       DefaultVisibility,
+		}
+	}
+
+	switch settings.Visibility {
+	case VisibilityPublic:
+		return true, nil
+	case VisibilityPrivate:
+		return false, nil
+	default:
+		sub, ok := s.repo.GetSubscription(viewerID, publisherID)
+		return ok && sub.Status == SubscriptionStatusActive, nil
+	}
 }
 
 func (s *Service) isExpired(updatedAt time.Time) bool {

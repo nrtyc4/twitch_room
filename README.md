@@ -1,6 +1,6 @@
 # Twitch Room
 
-Twitch Room is a small Go service for sharing which Twitch streams a user is currently watching with other users.
+Twitch Room is a small Go service for publishing which Twitch streams a user is currently watching, and letting people who subscribe to that user see it in a feed. It uses a publish/subscribe model: each user can decide how people subscribe to them (`open` or `approved`) and who can see their watch state (`public`, `subscribers`, or `private`).
 
 ## Architecture
 
@@ -17,7 +17,9 @@ This is the production-safe approach the service aims to use:
 
 - Twitch OAuth provides user identity.
 - The API should never trust a client-provided `user_id` value.
-- Users can only read or update their own watch state.
+- Users can always read or update their own watch state.
+- Other users see a watch state only if the publisher allows it: it is public to everyone, visible to approved subscribers, or private.
+- Subscriptions are `open` (anyone can subscribe instantly) or `approved` (subscribe requests must be accepted by the publisher).
 - Feed visibility is opt-in and not globally public by default.
 - HTTPS is required in production.
 - Rate limiting, secret management, and expiry windows should be added before public deployment.
@@ -61,7 +63,18 @@ Requests to the watch/feed endpoints must be authenticated. The service accepts 
 - An `X-User-ID` header with the target user's ID (dev auth, or the `user_id` from the OAuth callback). When `TWITCH_ROOM_AUTH_TOKEN` is set, the `X-User-ID` header must also carry a matching `Authorization: Bearer <token>`.
 - A valid Twitch access token in the `Authorization: Bearer <token>` header, which is validated against Twitch before being trusted.
 
-Users can only read or update their own watch state; ownership is enforced server-side regardless of the headers sent.
+Users can always read or update their own watch state. Everyone reads someone else's watch state only when the publisher's visibility setting allows it and (for `subscribers` visibility) the reader has an active subscription. Subscription mode and visibility are enforced server-side regardless of the headers sent.
+
+## Subscriptions and visibility
+
+Each publisher controls two settings via `PUT /v1/settings`:
+
+| Setting | Values | Meaning |
+|---|---|---|
+| `subscription_mode` | `open` \| `approved` | `open` subscribes instantly; `approved` creates a pending request the publisher must accept. |
+| `visibility` | `public` \| `subscribers` \| `private` | `public` is visible to any authenticated user, `subscribers` only to accepted subscribers, `private` to no one. |
+
+Defaults are `open` + `subscribers`. The `/v1/feed` endpoint returns watch state only from publishers the viewer has an **active** subscription to.
 
 ## Twitch OAuth Setup
 
@@ -89,9 +102,16 @@ The `state` parameter is stored server-side at the start of the flow and verifie
 ## API
 
 - `GET /health`
-- `POST /v1/watch`
-- `GET /v1/users/{user_id}/watch`
-- `GET /v1/feed`
+- `POST /v1/watch` — publish the streams you are currently watching
+- `GET /v1/users/{user_id}/watch` — read a user's watch state (self, public publishers, or active subscribers)
+- `GET /v1/feed` — feed of active subscriptions
+- `GET|PUT /v1/settings` — read or update `subscription_mode` and `visibility`
+- `GET /v1/subscriptions` — list the current user's subscriptions
+- `POST /v1/subscriptions/{publisher_id}` — subscribe (201 if open, 202 if pending approval)
+- `DELETE /v1/subscriptions/{publisher_id}` — unsubscribe
+- `GET /v1/subscription_requests` — pending subscribe requests (publisher view)
+- `POST /v1/subscription_requests/{user_id}/approve` — accept a pending request
+- `POST /v1/subscription_requests/{user_id}/reject` — reject a pending request
 - `GET /auth/twitch`
 - `GET /auth/twitch/callback`
 

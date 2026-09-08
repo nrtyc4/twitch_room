@@ -12,11 +12,23 @@ type WatchStateStore interface {
 	Get(userID string) (service.UserWatchState, bool)
 	List(limit int) []service.UserWatchState
 	Delete(userID string)
+
+	SetPublisherSettings(settings service.PublisherSettings) error
+	GetPublisherSettings(userID string) (service.PublisherSettings, bool)
+
+	UpsertSubscription(sub service.Subscription) error
+	GetSubscription(subscriberID, publisherID string) (service.Subscription, bool)
+	ListSubscriptionsForSubscriber(subscriberID string) []service.Subscription
+	ListSubscriptionsForPublisher(publisherID string, status service.SubscriptionStatus) []service.Subscription
+	SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error
+	DeleteSubscription(subscriberID, publisherID string)
 }
 
 type MemoryStore struct {
-	mu    sync.RWMutex
-	items map[string]service.UserWatchState
+	mu            sync.RWMutex
+	items         map[string]service.UserWatchState
+	settings      map[string]service.PublisherSettings
+	subscriptions map[string]service.Subscription
 }
 
 type ServiceAdapter struct {
@@ -24,7 +36,15 @@ type ServiceAdapter struct {
 }
 
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{items: make(map[string]service.UserWatchState)}
+	return &MemoryStore{
+		items:         make(map[string]service.UserWatchState),
+		settings:      make(map[string]service.PublisherSettings),
+		subscriptions: make(map[string]service.Subscription),
+	}
+}
+
+func subscriptionKey(subscriberID, publisherID string) string {
+	return subscriberID + "\x00" + publisherID
 }
 
 func NewServiceAdapter(store WatchStateStore) *ServiceAdapter {
@@ -87,6 +107,79 @@ func (s *MemoryStore) Delete(userID string) {
 	delete(s.items, userID)
 }
 
+func (s *MemoryStore) SetPublisherSettings(settings service.PublisherSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings[settings.UserID] = settings
+	return nil
+}
+
+func (s *MemoryStore) GetPublisherSettings(userID string) (service.PublisherSettings, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	settings, ok := s.settings[userID]
+	return settings, ok
+}
+
+func (s *MemoryStore) UpsertSubscription(sub service.Subscription) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptions[subscriptionKey(sub.SubscriberID, sub.PublisherID)] = sub
+	return nil
+}
+
+func (s *MemoryStore) GetSubscription(subscriberID, publisherID string) (service.Subscription, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sub, ok := s.subscriptions[subscriptionKey(subscriberID, publisherID)]
+	return sub, ok
+}
+
+func (s *MemoryStore) ListSubscriptionsForSubscriber(subscriberID string) []service.Subscription {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	subs := make([]service.Subscription, 0)
+	for _, sub := range s.subscriptions {
+		if sub.SubscriberID == subscriberID {
+			subs = append(subs, sub)
+		}
+	}
+	return subs
+}
+
+func (s *MemoryStore) ListSubscriptionsForPublisher(publisherID string, status service.SubscriptionStatus) []service.Subscription {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	subs := make([]service.Subscription, 0)
+	for _, sub := range s.subscriptions {
+		if sub.PublisherID == publisherID && sub.Status == status {
+			subs = append(subs, sub)
+		}
+	}
+	return subs
+}
+
+func (s *MemoryStore) SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := subscriptionKey(subscriberID, publisherID)
+	sub, ok := s.subscriptions[key]
+	if !ok {
+		return service.ErrNotSubscribed
+	}
+	sub.Status = status
+	s.subscriptions[key] = sub
+	return nil
+}
+
+func (s *MemoryStore) DeleteSubscription(subscriberID, publisherID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, subscriptionKey(subscriberID, publisherID))
+}
+
 func (a *ServiceAdapter) UpsertUserWatchState(userID string, streamIDs []string, updatedAt time.Time) (service.UserWatchState, error) {
 	return a.store.Upsert(userID, streamIDs, updatedAt)
 }
@@ -101,4 +194,36 @@ func (a *ServiceAdapter) ListActiveUsers(limit int) []service.UserWatchState {
 
 func (a *ServiceAdapter) DeleteUserWatchState(userID string) {
 	a.store.Delete(userID)
+}
+
+func (a *ServiceAdapter) SetPublisherSettings(settings service.PublisherSettings) error {
+	return a.store.SetPublisherSettings(settings)
+}
+
+func (a *ServiceAdapter) GetPublisherSettings(userID string) (service.PublisherSettings, bool) {
+	return a.store.GetPublisherSettings(userID)
+}
+
+func (a *ServiceAdapter) UpsertSubscription(sub service.Subscription) error {
+	return a.store.UpsertSubscription(sub)
+}
+
+func (a *ServiceAdapter) GetSubscription(subscriberID, publisherID string) (service.Subscription, bool) {
+	return a.store.GetSubscription(subscriberID, publisherID)
+}
+
+func (a *ServiceAdapter) ListSubscriptionsForSubscriber(subscriberID string) []service.Subscription {
+	return a.store.ListSubscriptionsForSubscriber(subscriberID)
+}
+
+func (a *ServiceAdapter) ListSubscriptionsForPublisher(publisherID string, status service.SubscriptionStatus) []service.Subscription {
+	return a.store.ListSubscriptionsForPublisher(publisherID, status)
+}
+
+func (a *ServiceAdapter) SetSubscriptionStatus(subscriberID, publisherID string, status service.SubscriptionStatus) error {
+	return a.store.SetSubscriptionStatus(subscriberID, publisherID, status)
+}
+
+func (a *ServiceAdapter) DeleteSubscription(subscriberID, publisherID string) {
+	a.store.DeleteSubscription(subscriberID, publisherID)
 }
