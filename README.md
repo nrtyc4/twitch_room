@@ -52,6 +52,39 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `TWITCH_CLIENT_ID` | Twitch OAuth client ID | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 | `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 | `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
+| `APP_REDIRECT_AFTER_LOGIN` | Post-login URL in the app | `/` | No | Browser is redirected here with `?user_id=...` after OAuth. |
+
+## Authentication
+
+Requests to the watch/feed endpoints must be authenticated. The service accepts either of the following:
+
+- An `X-User-ID` header with the target user's ID (dev auth, or the `user_id` from the OAuth callback). When `TWITCH_ROOM_AUTH_TOKEN` is set, the `X-User-ID` header must also carry a matching `Authorization: Bearer <token>`.
+- A valid Twitch access token in the `Authorization: Bearer <token>` header, which is validated against Twitch before being trusted.
+
+Users can only read or update their own watch state; ownership is enforced server-side regardless of the headers sent.
+
+## Twitch OAuth Setup
+
+To use real Twitch authentication (instead of dev auth), create an application in the [Twitch Developer Console](https://dev.twitch.tv/console/apps):
+
+1.  Create a new application and copy its **Client ID** and **Client Secret**.
+2.  Under **OAuth Redirect URLs**, register exactly the value you set for `TWITCH_REDIRECT_URI`. For local development this is `http://localhost:8080/auth/twitch/callback`. Twitch requires HTTPS in production (localhost is the exception).
+3.  Populate `.env` with the real values (see `.env.example`):
+    ```
+    TWITCH_CLIENT_ID=<your client id>
+    TWITCH_CLIENT_SECRET=<your client secret>
+    TWITCH_REDIRECT_URI=http://localhost:8080/auth/twitch/callback
+    APP_REDIRECT_AFTER_LOGIN=/   # where the browser goes after login
+    ```
+4.  Set `ALLOW_DEV_AUTH=false` for production.
+
+The login flow is:
+
+- `GET /auth/twitch` redirects the browser to Twitch's authorization page.
+- After the user authorizes, Twitch redirects back to `/auth/twitch/callback?code=...&state=...`. The service exchanges the code for an access token, resolves the Twitch user, and redirects the browser to `APP_REDIRECT_AFTER_LOGIN?user_id=<login>`.
+- The client then authenticates subsequent API calls with that `user_id` (see Authentication below).
+
+The `state` parameter is stored server-side at the start of the flow and verified on the callback to prevent CSRF.
 
 ## API
 
@@ -59,6 +92,8 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 - `POST /v1/watch`
 - `GET /v1/users/{user_id}/watch`
 - `GET /v1/feed`
+- `GET /auth/twitch`
+- `GET /auth/twitch/callback`
 
 ## Notes
 

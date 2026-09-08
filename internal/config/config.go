@@ -6,11 +6,12 @@ import (
 )
 
 type Config struct {
-	Port             string
-	AuthToken        string
-	AllowDevAuth     bool
-	WatchStateTTLMin int
-	DatabaseDSN      string
+	Port              string
+	AuthToken         string
+	AllowDevAuth      bool
+	WatchStateTTLMin  int
+	DatabaseDSN       string
+	RedirectAfterLogin string
 }
 
 func Load() Config {
@@ -32,11 +33,17 @@ func Load() Config {
 		}
 	}
 
+	redirectAfterLogin := "/"
+	if value := os.Getenv("APP_REDIRECT_AFTER_LOGIN"); value != "" {
+		redirectAfterLogin = value
+	}
+
 	return Config{
-		Port:             port,
-		AuthToken:        os.Getenv("TWITCH_ROOM_AUTH_TOKEN"),
-		AllowDevAuth:     allowDevAuth,
-		WatchStateTTLMin: ttlMinutes,
-		DatabaseDSN:      os.Getenv("DATABASE_DSN"),
+		Port:               port,
+		AuthToken:          os.Getenv("TWITCH_ROOM_AUTH_TOKEN"),
+		AllowDevAuth:       allowDevAuth,
+		WatchStateTTLMin:   ttlMinutes,
+		DatabaseDSN:        os.Getenv("DATABASE_DSN"),
+		RedirectAfterLogin: redirectAfterLogin,
 	}
 }

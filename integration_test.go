@@ -399,11 +399,13 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	}
 
 	s := &server{
-		watchService:     svc,
-		authMiddleware:   &auth.Middleware{AllowDevAuth: true},
-		identityProvider: provider,
-		rateLimiter:      security.NewRateLimiter(100, time.Minute),
-		watchStateCache:  performance.NewWatchStateCache(5 * time.Minute),
+		watchService:       svc,
+		authMiddleware:     &auth.Middleware{AllowDevAuth: true},
+		identityProvider:   provider,
+		rateLimiter:        security.NewRateLimiter(100, time.Minute),
+		watchStateCache:    performance.NewWatchStateCache(5 * time.Minute),
+		oauthStates:        newOAuthStateStore(15 * time.Minute),
+		redirectAfterLogin: "/app",
 	}
 
 	mux := http.NewServeMux()
@@ -414,12 +416,13 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
 
-	// Test 1: Login redirects with a 302 to the Twitch authorize URL.
+	// Don't follow redirects so we can inspect the Location header.
 	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 
-	loginReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch", nil)
+	// Test 1: Login redirects with a 302 to the Twitch authorize URL.
+	loginReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch?state=test-state", nil)
 	loginResp, err := client.Do(loginReq)
 	if err != nil {
 		t.Fatalf("login request failed: %v", err)
@@ -432,29 +435,36 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 		t.Fatalf("expected redirect to Twitch authorize URL, got %q", loc)
 	}
 
-	// Test 2: Callback with a code resolves the user and returns the user id.
-	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?code=abc123", nil)
+	// Test 2: Callback with the issued state and a code resolves the user and
+	// redirects the browser into the app with the user id.
+	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state=test-state&code=abc123", nil)
 	callbackResp, err := client.Do(callbackReq)
 	if err != nil {
 		t.Fatalf("callback request failed: %v", err)
 	}
-	if callbackResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from callback, got %d", callbackResp.StatusCode)
+	if callbackResp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 from callback, got %d", callbackResp.StatusCode)
+	}
+	cbLoc := callbackResp.Header.Get("Location")
+	if cbLoc != "/app?user_id=twitch-login-user" {
+		t.Fatalf("expected redirect into the app, got %q", cbLoc)
 	}
 
-	var cb map[string]string
-	if err := json.NewDecoder(callbackResp.Body).Decode(&cb); err != nil {
-		t.Fatalf("failed to decode callback response: %v", err)
+	// Test 3: Callback with an unknown state is rejected.
+	badStateReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state=wrong-state&code=abc123", nil)
+	badStateResp, err := client.Do(badStateReq)
+	if err != nil {
+		t.Fatalf("callback request failed: %v", err)
 	}
-	if cb["user_id"] != "twitch-login-user" {
-		t.Fatalf("expected user_id 'twitch-login-user', got %q", cb["user_id"])
+	if badStateResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown state, got %d", badStateResp.StatusCode)
 	}
 
-	// Test 3: Callback without a code returns 400.
-	badReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback", nil)
-	badResp, _ := client.Do(badReq)
-	if badResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing code, got %d", badResp.StatusCode)
+	// Test 4: A state cannot be reused after it has been consumed.
+	reusedReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state=test-state&code=abc123", nil)
+	reusedResp, _ := client.Do(reusedReq)
+	if reusedResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for reused state, got %d", reusedResp.StatusCode)
 	}
 
 	t.Logf("Twitch login/callback flow integration test passed")

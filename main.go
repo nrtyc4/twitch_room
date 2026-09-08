@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"twitch_room/internal/auth"
@@ -31,6 +33,45 @@ type server struct {
 	identityProvider identity.Provider
 	rateLimiter      *security.RateLimiter
 	watchStateCache  *performance.WatchStateCache
+	oauthStates      *oauthStateStore
+	redirectAfterLogin string
+}
+
+// oauthStateStore tracks pending OAuth state values for CSRF protection.
+type oauthStateStore struct {
+	mu      sync.Mutex
+	states  map[string]time.Time
+	timeout time.Duration
+}
+
+func newOAuthStateStore(timeout time.Duration) *oauthStateStore {
+	return &oauthStateStore{
+		states:  make(map[string]time.Time),
+		timeout: timeout,
+	}
+}
+
+func (o *oauthStateStore) Put(state string) {
+	if state == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.states[state] = time.Now().Add(o.timeout)
+}
+
+func (o *oauthStateStore) Verify(state string) bool {
+	if state == "" {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	expires, ok := o.states[state]
+	if !ok {
+		return false
+	}
+	delete(o.states, state)
+	return time.Now().Before(expires)
 }
 
 func main() {
@@ -87,11 +128,13 @@ func main() {
 	watchStateCache := performance.NewWatchStateCache(cacheTTL)
 
 	s := &server{
-		watchService:     svc,
-		authMiddleware:   &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
-		identityProvider: identityProvider,
-		rateLimiter:      security.NewRateLimiter(30, time.Minute),
-		watchStateCache:  watchStateCache,
+		watchService:       svc,
+		authMiddleware:     &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
+		identityProvider:   identityProvider,
+		rateLimiter:        security.NewRateLimiter(30, time.Minute),
+		watchStateCache:    watchStateCache,
+		oauthStates:        newOAuthStateStore(15 * time.Minute),
+		redirectAfterLogin: cfg.RedirectAfterLogin,
 	}
 
 	mux := http.NewServeMux()
@@ -261,6 +304,10 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 		state = randomState()
 	}
 
+	if s.oauthStates != nil {
+		s.oauthStates.Put(state)
+	}
+
 	authURL, err := s.identityProvider.BuildAuthorizeURL(state, nil)
 	if err != nil {
 		log.Printf("failed to build authorize URL: %v", err)
@@ -277,6 +324,11 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.oauthStates != nil && !s.oauthStates.Verify(r.URL.Query().Get("state")) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or missing state"})
+		return
+	}
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing code"})
@@ -290,7 +342,17 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"user_id": userID})
+	// Redirect the browser into the app, carrying the resolved identity in the
+	// query string so the client can authenticate subsequent requests.
+	redirect := s.redirectAfterLogin
+	if redirect == "" {
+		redirect = "/"
+	}
+	sep := "?"
+	if strings.Contains(redirect, "?") {
+		sep = "&"
+	}
+	http.Redirect(w, r, redirect+sep+"user_id="+url.QueryEscape(userID), http.StatusFound)
 }
 
 func (s *server) requireUser(r *http.Request) (string, bool) {
