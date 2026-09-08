@@ -55,6 +55,7 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 | `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
 | `APP_REDIRECT_AFTER_LOGIN` | Post-login URL in the app | `/` | No | Browser is redirected here with `?user_id=...` after OAuth. |
+| `WATCH_REFRESH_SECONDS` | How often Twitch metadata is re-resolved for published states | `60` | No | Only active when Twitch enrichment is enabled. Refreshing metadata does not extend a state's lifetime. |
 
 ## Authentication
 
@@ -116,7 +117,7 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 ## API
 
 - `Publish` request body: `{"stream_ids": ["shroud", "https://twitch.tv/xqc"]}` — accepts channel names or full `twitch.tv` URLs (deduplicated). Response includes a `streams` array.
-- `Twitch enrichment:` when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are set (they are in `.env` but intentionally absent from the Docker build), published stream IDs are resolved against the Twitch Helix API using the app client-credentials flow. Each stream gains `channel_name`, `title`, `game_name`, `thumbnail_url`, `viewer_count`, and `is_live`; IDs that do not match an existing channel are rejected with `400`. If Twitch is unreachable at publish time, the service degrades to storing plain IDs. With no credentials, plain IDs are stored as-is.
+- `Twitch enrichment:` when `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` are set (they are in `.env` but intentionally absent from the Docker build), published stream IDs are resolved against the Twitch Helix API using the app client-credentials flow. Each stream gains `channel_name`, `title`, `game_name`, `thumbnail_url`, `viewer_count`, and `is_live`; IDs that do not match an existing channel are rejected with `400`. If Twitch is unreachable at publish time, the service degrades to storing plain IDs. With no credentials, plain IDs are stored as-is. While enrichment is enabled a background job re-resolves the metadata for every active state every `WATCH_REFRESH_SECONDS` (channels going live or offline update in the feed without a re-publish; the state's own `updated_at` — and therefore its expiry — is preserved).
 - `GET /health`
 - `POST /v1/watch` — publish the streams you are currently watching
 - `DELETE /v1/watch` — stop watching (clears your published watch state)

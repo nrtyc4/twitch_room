@@ -217,6 +217,107 @@ func (s *Service) resolveStreams(logins []string, now time.Time) ([]Stream, erro
 	return streams, nil
 }
 
+// RefreshWatchStates re-resolves Twitch metadata for every non-expired watch
+// state and returns the user IDs whose states were refreshed. Expired states
+// are removed. The metadata refresh does not extend a state's lifetime: the
+// stored updated_at is preserved. Without an enricher only expired states are
+// removed and no metadata changes are made.
+func (s *Service) RefreshWatchStates(ctx context.Context) ([]string, error) {
+	const batchLimit = 1000
+
+	states := s.repo.ListActiveUsers(batchLimit)
+	live := make([]UserWatchState, 0, len(states))
+	for _, state := range states {
+		if s.isExpired(state.UpdatedAt) {
+			s.repo.DeleteUserWatchState(state.UserID)
+			continue
+		}
+		live = append(live, state)
+	}
+
+	if s.enricher == nil || len(live) == 0 {
+		return nil, nil
+	}
+
+	logins := make([]string, 0, len(live))
+	for _, state := range live {
+		for _, id := range watchLogins(state) {
+			logins = append(logins, id)
+		}
+	}
+	logins = normalizeStreamIDs(logins)
+
+	info, err := s.enricher.LookupStreams(ctx, logins)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshed := make([]string, 0, len(live))
+	for _, state := range live {
+		streams := refreshStreams(state, info)
+		if equalStreams(state.Streams, streams) {
+			continue
+		}
+		if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
+			return nil, err
+		}
+		refreshed = append(refreshed, state.UserID)
+	}
+	return refreshed, nil
+}
+
+// equalStreams reports whether two stream slices carry identical metadata.
+func equalStreams(a, b []Stream) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func watchLogins(state UserWatchState) []string {
+	streams := state.Streams
+	if len(streams) == 0 {
+		streams = make([]Stream, 0, len(state.StreamIDs))
+		for _, id := range state.StreamIDs {
+			streams = append(streams, Stream{ID: id})
+		}
+	}
+	return streamIDsFromStreams(streams)
+}
+
+// refreshStreams rebuilds a watch state's streams from freshly looked-up Twitch
+// metadata. Logins that no longer resolve (e.g. a renamed or deleted channel)
+// keep their previous metadata rather than being dropped.
+func refreshStreams(state UserWatchState, info map[string]StreamInfo) []Stream {
+	src := state.Streams
+	if len(src) == 0 {
+		for _, id := range state.StreamIDs {
+			src = append(src, Stream{ID: id})
+		}
+	}
+
+	out := make([]Stream, 0, len(src))
+	for _, st := range src {
+		next := st
+		if si, ok := info[st.ID]; ok && si.Exists {
+			next.ChannelName = si.ChannelName
+			next.Title = si.Title
+			next.GameName = si.GameName
+			next.ThumbnailURL = si.ThumbnailURL
+			next.ViewerCount = si.ViewerCount
+			next.IsLive = si.IsLive
+		}
+		next.UpdatedAt = state.UpdatedAt
+		out = append(out, next)
+	}
+	return out
+}
+
 func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
 	if userID == "" {
 		return UserWatchState{}, ErrInvalidUser

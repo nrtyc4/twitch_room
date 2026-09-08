@@ -471,3 +471,174 @@ func TestNormalizeStreamIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshWatchStatesSkipsUnchanged(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "t", ViewerCount: 3},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+
+	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+
+	refreshed, err := svc.RefreshWatchStates(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshWatchStates: %v", err)
+	}
+	if len(refreshed) != 0 {
+		t.Fatalf("expected no refreshes when metadata is unchanged, got %v", refreshed)
+	}
+}
+
+func TestRefreshWatchStatesUpdatesMetadata(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: false, ChannelName: "Stream One"},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+
+	state, err := svc.SetUserWatchState("user-1", []string{"stream-1"})
+	if err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+
+	// Channel goes live with a title between publish and refresh.
+	enricher.info["stream-1"] = StreamInfo{Exists: true, IsLive: true, ChannelName: "Stream One", Title: "now live", GameName: "Chess", ViewerCount: 9}
+
+	refreshed, err := svc.RefreshWatchStates(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshWatchStates: %v", err)
+	}
+	if len(refreshed) != 1 || refreshed[0] != "user-1" {
+		t.Fatalf("expected user-1 refreshed, got %v", refreshed)
+	}
+
+	got, _ := repo.GetUserWatchState("user-1")
+	if len(got.Streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(got.Streams))
+	}
+	s := got.Streams[0]
+	if !s.IsLive || s.Title != "now live" || s.GameName != "Chess" || s.ViewerCount != 9 {
+		t.Fatalf("expected refreshed live metadata, got %+v", s)
+	}
+	if !got.UpdatedAt.Equal(state.UpdatedAt) {
+		t.Fatal("refresh must not extend the state's lifetime (updated_at preserved)")
+	}
+}
+
+func TestRefreshWatchStatesClearsOfflineMetadata(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "old title", ViewerCount: 5},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+
+	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+
+	// Channel goes offline.
+	enricher.info["stream-1"] = StreamInfo{Exists: true, IsLive: false, ChannelName: "Stream One"}
+
+	if _, err := svc.RefreshWatchStates(context.Background()); err != nil {
+		t.Fatalf("RefreshWatchStates: %v", err)
+	}
+
+	got, _ := repo.GetUserWatchState("user-1")
+	s := got.Streams[0]
+	if s.IsLive || s.Title != "" || s.ViewerCount != 0 {
+		t.Fatalf("expected offline metadata cleared, got %+v", s)
+	}
+}
+
+func TestRefreshWatchStatesPreservesMissingChannels(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "live title", ViewerCount: 3},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+
+	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+
+	// The channel stops resolving entirely.
+	enricher.info = map[string]StreamInfo{}
+
+	if _, err := svc.RefreshWatchStates(context.Background()); err != nil {
+		t.Fatalf("RefreshWatchStates: %v", err)
+	}
+
+	got, _ := repo.GetUserWatchState("user-1")
+	s := got.Streams[0]
+	if !s.IsLive || s.Title != "live title" {
+		t.Fatalf("expected previous metadata preserved for missing channel, got %+v", s)
+	}
+}
+
+func TestRefreshWatchStatesDeletesExpired(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{
+		info: map[string]StreamInfo{
+			"stream-1": {Exists: true},
+			"stream-2": {Exists: true},
+		},
+	}
+	svc := NewServiceWithEnricher(repo, 10*time.Millisecond, enricher)
+
+	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+	if _, err := svc.SetUserWatchState("user-2", []string{"stream-2"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	refreshed, err := svc.RefreshWatchStates(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshWatchStates: %v", err)
+	}
+	if len(refreshed) != 0 {
+		t.Fatalf("expected no refreshed states, got %v", refreshed)
+	}
+	if _, ok := repo.GetUserWatchState("user-1"); ok {
+		t.Fatal("expected expired user-1 to be removed")
+	}
+	if _, ok := repo.GetUserWatchState("user-2"); ok {
+		t.Fatal("expected expired user-2 to be removed")
+	}
+}
+
+func TestRefreshWatchStatesDelegatesLookupError(t *testing.T) {
+	repo := NewMemoryRepository()
+	enricher := &fakeEnricher{err: errors.New("twitch down")}
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+
+	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
+		t.Fatalf("SetUserWatchState: %v", err)
+	}
+
+	if _, err := svc.RefreshWatchStates(context.Background()); err == nil {
+		t.Fatal("expected lookup error to propagate")
+	}
+	// State must be untouched on failure.
+	got, ok := repo.GetUserWatchState("user-1")
+	if !ok {
+		t.Fatal("expected state to remain")
+	}
+	for _, s := range got.Streams {
+		if s.IsLive {
+			t.Fatal("expected no metadata change on refresh error")
+		}
+	}
+}

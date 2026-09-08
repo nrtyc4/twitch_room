@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -145,6 +146,29 @@ func main() {
 	// Create watch state cache with same TTL as service
 	cacheTTL := time.Duration(cfg.WatchStateTTLMin) * time.Minute
 	watchStateCache := performance.NewWatchStateCache(cacheTTL)
+
+	// Keep published stream metadata fresh when enrichment is on: re-resolve
+	// Twitch metadata every WATCH_REFRESH_SECONDS and drop stale cache entries.
+	if sec.TwitchClientID != "" && sec.TwitchClientSecret != "" {
+		refreshInterval := time.Duration(cfg.WatchRefreshSeconds) * time.Second
+		go func() {
+			ticker := time.NewTicker(refreshInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				refreshed, err := svc.RefreshWatchStates(ctx)
+				cancel()
+				if err != nil {
+					log.Printf("watch state refresh failed: %v", err)
+					continue
+				}
+				if len(refreshed) > 0 {
+					watchStateCache.InvalidateAll()
+					log.Printf("refreshed metadata for %d watch state(s)", len(refreshed))
+				}
+			}
+		}()
+	}
 
 	s := &server{
 		watchService:       svc,
