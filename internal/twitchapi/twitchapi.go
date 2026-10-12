@@ -265,6 +265,91 @@ func (c *Client) fetchStreams(ctx context.Context, logins []string) ([]helixStre
 	return payload.Data, nil
 }
 
+// FollowedStream is a live stream belonging to one of the token holder's
+// followed channels.
+type FollowedStream struct {
+	UserLogin    string `json:"user_login"`
+	UserName     string `json:"user_name"`
+	GameName     string `json:"game_name"`
+	Title        string `json:"title"`
+	ViewerCount  int    `json:"viewer_count"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
+// FollowedLiveStreams fetches the channels the authenticated user follows
+// that are live right now, sorted by viewer count. It is the data source for
+// one-click watch publishing. The caller must supply the user's own OAuth
+// access token (scopes: user:read:follows); the numeric Twitch ID required
+// by /streams/followed is resolved from that same token. An empty token
+// yields no streams.
+func (c *Client) FollowedLiveStreams(ctx context.Context, userAccessToken string) ([]FollowedStream, error) {
+	if userAccessToken == "" {
+		return nil, nil
+	}
+
+	var userPayload struct {
+		Data []helixUser `json:"data"`
+	}
+	body, err := c.userTokenGet(ctx, userAccessToken, "/users", url.Values{})
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(body, &userPayload); err != nil {
+		return nil, fmt.Errorf("decode users response: %w", err)
+	}
+	if len(userPayload.Data) == 0 {
+		return nil, nil
+	}
+
+	params := url.Values{}
+	params.Set("user_id", userPayload.Data[0].ID)
+	params.Set("first", "100")
+
+	body, err = c.userTokenGet(ctx, userAccessToken, "/streams/followed", params)
+	if err != nil {
+		return nil, err
+	}
+	var streamPayload struct {
+		Data []FollowedStream `json:"data"`
+	}
+	if err := json.Unmarshal(body, &streamPayload); err != nil {
+		return nil, fmt.Errorf("decode followed streams response: %w", err)
+	}
+	for i := range streamPayload.Data {
+		streamPayload.Data[i].ThumbnailURL = sizedThumbnail(streamPayload.Data[i].ThumbnailURL)
+	}
+	sort.Slice(streamPayload.Data, func(i, j int) bool {
+		return streamPayload.Data[i].ViewerCount > streamPayload.Data[j].ViewerCount
+	})
+	return streamPayload.Data, nil
+}
+
+// userTokenGet performs a Helix GET authenticated as a Twitch user (rather
+// than as the app), using the supplied user access token.
+func (c *Client) userTokenGet(ctx context.Context, userAccessToken, path string, params url.Values) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+path+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Client-ID", c.clientID)
+	req.Header.Set("Authorization", "Bearer "+userAccessToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("helix %s returned %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return body, nil
+}
+
 // sizedThumbnail swaps Helix's {width}/{height} placeholders for a 320x180
 // crop and returns the concrete URL, or "" when the template is missing.
 func sizedThumbnail(template string) string {

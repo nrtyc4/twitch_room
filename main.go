@@ -40,6 +40,7 @@ type server struct {
 	watchService       *service.Service
 	authMiddleware     *auth.Middleware
 	identityProvider   identity.Provider
+	suggestor          followedSuggestor
 	rateLimiter        *security.RateLimiter
 	authLimiter        *security.RateLimiter
 	watchStateCache    *performance.WatchStateCache
@@ -49,6 +50,13 @@ type server struct {
 	trustedProxyCIDRs  []netip.Prefix
 	shareLimiter       *security.RateLimiter
 	metrics            *metrics.Registry
+}
+
+// followedSuggestor feeds the watch-box autofill: the live channels a Twitch
+// user follows, fetched with their own access token. It is implemented by the
+// enrichment client when Twitch credentials are configured.
+type followedSuggestor interface {
+	FollowedLiveStreams(ctx context.Context, userAccessToken string) ([]twitchapi.FollowedStream, error)
 }
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
@@ -89,6 +97,7 @@ func (o *oauthStateStore) Verify(state string) bool {
 }
 
 func main() {
+	var suggestor followedSuggestor
 	fmt.Println("Initializing twitch-room service")
 
 	// Load secrets (optional .env file for local development)
@@ -152,6 +161,7 @@ func main() {
 	if sec.TwitchClientID != "" && sec.TwitchClientSecret != "" {
 		enricher := twitchapi.NewClient(sec.TwitchClientID, sec.TwitchClientSecret)
 		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher)
+		suggestor = enricher
 		log.Printf("Twitch enrichment enabled")
 	}
 
@@ -200,6 +210,7 @@ func main() {
 		watchService:       svc,
 		authMiddleware:     &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
 		identityProvider:   identityProvider,
+		suggestor:          suggestor,
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		authLimiter:        security.NewRateLimiter(20, time.Minute),
 		shareLimiter:       security.NewRateLimiter(60, time.Minute),
@@ -699,7 +710,9 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 		s.oauthStates.Put(state)
 	}
 
-	authURL, err := s.identityProvider.BuildAuthorizeURL(state, nil)
+	// user:read:follows lets us prefill the watch box with the channels the
+	// user follows that are live right now, so publishing is one click.
+	authURL, err := s.identityProvider.BuildAuthorizeURL(state, []string{"user:read:follows"})
 	if err != nil {
 		log.Printf("failed to build authorize URL: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "OAuth not configured"})
@@ -730,7 +743,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := s.identityProvider.ResolveUserID(r.Context(), r)
+	userID, accessToken, err := s.identityProvider.ResolveIdentity(r.Context(), r)
 	if err != nil {
 		log.Printf("failed to resolve user id from OAuth code: %v", err)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication failed"})
@@ -738,9 +751,11 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Issue a session cookie so the browser can authenticate API calls without
-	// holding the raw Twitch token.
+	// holding the raw Twitch token. The user access token (empty for dev auth
+	// sessions) is kept alongside so follow-based watch suggestions can query
+	// Twitch on the user's behalf.
 	if s.sessions != nil {
-		if err := s.sessions.setSessionCookie(w, r, userID); err != nil {
+		if err := s.sessions.setSessionCookie(w, r, userID, accessToken); err != nil {
 			log.Printf("failed to create session: %v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 			return

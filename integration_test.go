@@ -597,6 +597,7 @@ func TestIntegrationWebUI(t *testing.T) {
 // stubProvider is a minimal identity.Provider for wiring tests.
 type stubProvider struct {
 	resolvedUserID string
+	accessToken    string
 	resolveErr     error
 	authorizeURL   string
 	authorizeErr   error
@@ -604,6 +605,10 @@ type stubProvider struct {
 
 func (s *stubProvider) ResolveUserID(ctx context.Context, r *http.Request) (string, error) {
 	return s.resolvedUserID, s.resolveErr
+}
+
+func (s *stubProvider) ResolveIdentity(ctx context.Context, r *http.Request) (string, string, error) {
+	return s.resolvedUserID, s.accessToken, s.resolveErr
 }
 
 func (s *stubProvider) BuildAuthorizeURL(state string, scopes []string) (string, error) {

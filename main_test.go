@@ -53,7 +53,7 @@ func TestSessionCookieSecureWhenEnabled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	if err := s.setSessionCookie(rec, req, "user-1"); err != nil {
+	if err := s.setSessionCookie(rec, req, "user-1", ""); err != nil {
 		t.Fatalf("setSessionCookie failed: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestSessionCookieNotSecureByDefaultOverPlainHTTP(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
-	if err := s.setSessionCookie(rec, req, "user-1"); err != nil {
+	if err := s.setSessionCookie(rec, req, "user-1", ""); err != nil {
 		t.Fatalf("setSessionCookie failed: %v", err)
 	}
 

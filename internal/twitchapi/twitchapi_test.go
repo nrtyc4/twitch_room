@@ -12,11 +12,15 @@ import (
 )
 
 type fakeHelix struct {
-	mu         sync.Mutex
-	tokenCalls int32
-	usersCalls int32
-	usersData  []helixUser
-	streams    []helixStream
+	mu            sync.Mutex
+	tokenCalls    int32
+	usersCalls    int32
+	usersData     []helixUser
+	selfData      []helixUser
+	streams       []helixStream
+	followed      []FollowedStream
+	followedQuery string
+	lastAuth      string
 }
 
 func (f *fakeHelix) handler(t *testing.T) http.Handler {
@@ -31,11 +35,17 @@ func (f *fakeHelix) handler(t *testing.T) http.Handler {
 		case r.URL.Path == "/users":
 			f.mu.Lock()
 			f.usersCalls++
+			f.lastAuth = r.Header.Get("Authorization")
 			want := loginSet(r.URL.Query()["login"])
 			data := make([]helixUser, 0, len(f.usersData))
-			for _, u := range f.usersData {
-				if want[strings.ToLower(u.Login)] {
-					data = append(data, u)
+			if len(want) == 0 {
+				// Authenticated self-lookup returns the requesting user.
+				data = append(data, f.selfData...)
+			} else {
+				for _, u := range f.usersData {
+					if want[strings.ToLower(u.Login)] {
+						data = append(data, u)
+					}
 				}
 			}
 			f.mu.Unlock()
@@ -51,6 +61,13 @@ func (f *fakeHelix) handler(t *testing.T) http.Handler {
 				}
 			}
 			json.NewEncoder(w).Encode(map[string]any{"data": data})
+		case r.URL.Path == "/streams/followed":
+			f.mu.Lock()
+			f.followedQuery = r.URL.Query().Get("user_id")
+			f.lastAuth = r.Header.Get("Authorization")
+			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"data": f.followed})
 		default:
 			http.NotFound(w, r)
 		}
@@ -282,5 +299,52 @@ func TestAccessTokenCachedAndRefreshedOnExpiry(t *testing.T) {
 	f.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("expected 2 token fetches after expiry, got %d", calls)
+	}
+}
+
+func TestFollowedLiveStreams(t *testing.T) {
+	f := &fakeHelix{
+		selfData: []helixUser{{ID: "123", Login: "viewer1", DisplayName: "viewer1"}},
+		followed: []FollowedStream{
+			{UserLogin: "small", UserName: "small", Title: "off to a slow start", GameName: "Just Chatting", ViewerCount: 3, ThumbnailURL: "https://static-cdn.jtvnw.net/a/{width}x{height}.jpg"},
+			{UserLogin: "big", UserName: "big", Title: "gran finale", GameName: "Chess", ViewerCount: 90210, ThumbnailURL: "https://static-cdn.jtvnw.net/b/{width}x{height}.jpg"},
+		},
+	}
+	c, _ := newTestClient(t, f)
+
+	streams, err := c.FollowedLiveStreams(context.Background(), "user-access-token")
+	if err != nil {
+		t.Fatalf("FollowedLiveStreams: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.followedQuery != "123" {
+		t.Fatalf("expected /streams/followed filtered by numeric user id, got %q", f.followedQuery)
+	}
+	if f.lastAuth != "Bearer user-access-token" {
+		t.Fatalf("expected user access token in Authorization header, got %q", f.lastAuth)
+	}
+
+	if len(streams) != 2 {
+		t.Fatalf("expected 2 followed streams, got %d", len(streams))
+	}
+	// Sorted by viewer count, most-watched first.
+	if streams[0].UserLogin != "big" || streams[1].UserLogin != "small" {
+		t.Fatalf("expected viewer-descending order, got %+v", streams)
+	}
+	if streams[0].ThumbnailURL != "https://static-cdn.jtvnw.net/b/320x180.jpg" {
+		t.Fatalf("expected sized thumbnail, got %q", streams[0].ThumbnailURL)
+	}
+}
+
+func TestFollowedLiveStreamsEmptyToken(t *testing.T) {
+	c, _ := newTestClient(t, &fakeHelix{})
+	streams, err := c.FollowedLiveStreams(context.Background(), "")
+	if err != nil {
+		t.Fatalf("FollowedLiveStreams with empty token: %v", err)
+	}
+	if len(streams) != 0 {
+		t.Fatalf("expected no streams for empty token, got %+v", streams)
 	}
 }
