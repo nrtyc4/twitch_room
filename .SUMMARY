@@ -1,0 +1,47 @@
+# Session Summary
+
+## Objective
+Add a `/metrics` endpoint exposing Prometheus text-format metrics (zero-dependency registry in `internal/metrics`), plus repository-driven gauges (active watch states, subscriptions by status), HTTP request/status/duration metrics, and throttled-request counters — gated by the configured auth bearer token when set. COMPLETED.
+
+## Important Details
+- Project: Go service `twitch_room` at `C:\Users\natth\goProjects\twitch_room`, module `twitch_room`, Windows PowerShell.
+- Commits this session: `3403e29` hardening, `794dd61` graceful shutdown, `e81b64d` strict ID validation, `9cde7bb` share pages, `b16161b` metrics endpoint. All work committed; tree clean.
+- `gofmt -l` flags pre-existing CRLF files (internal/{auth,config,performance,secrets,security}) — never re-format those (CRLF vs LF noise). New files I add are LF; run `gofmt -w` only on files I created/edited heavily.
+- Important: `internal/auth/auth.go` remains a msrv-unformatted CRLF file even though I ADDED code to it (Authorized helper) — do NOT gofmt -w it.
+- `main_test.go` had a UTF-8 BOM at the start; `gofmt -w` removed it safely (file was LF otherwise).
+- Bash commands kill background jobs when they end → live server checks must be Start-Job → all curls → Stop-Job/Remove-Job in ONE bash call.
+- PowerShell note: putting JSON bodies inline in `curl.exe -d '...'` INSIDE a Start-Job scriptblock mangles quoting (server returns 400). Use `Set-Content -NoNewline -Encoding ascii tempfile.json` + `curl.exe --data "@path"` even inside jobs.
+- Container: compose service is `twitch-room`, listens on **8080**, has NO Twitch creds, `ALLOW_DEV_AUTH=true`, and **`TWITCH_ROOM_AUTH_TOKEN=dev-secret-token`** set in compose env (NOT `.env`, which holds the placeholder `your_auth_token_here`). Container DB is the real PostgreSQL (twitch_room@db, internal port 5432). Every API call in the container needs `Authorization: Bearer dev-secret-token` + `X-User-ID` for user endpoints.
+- Local `.env` HAS real Twitch creds; local DATABASE_DSN lacks `sslmode` → local run falls back to in-memory; live PG tests: `TEST_DATABASE_DSN='postgres://twitch_room:twitch_room@localhost:5432/twitch_room?sslmode=disable'`.
+- Self-signed test certs: `C:\Users\natth\AppData\Local\Temp\opencode\tls.pem` / `tls.key`.
+- Metrics registry output is stable/ordered (tests assert exact strings); label rendering uses `%q`. Histogram buckets: DefaultDurationBuckets `[0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5,10]`.
+- NOTE: `/metrics` renders request-metric series ONE SCRAPE BEHIND — counters are incremented AFTER the body is written, so the current request's metrics appear on the NEXT scrape. Tests handle this (assert on second scrape).
+- Service/repo layering: `service.Repository` is implemented by `service.MemoryRepository` AND `repository.ServiceAdapter` (wraps `repository.WatchStateStore`). `WatchStateStore` is implemented by `repository.MemoryStore` and `repository.PostgresStore`. When changing the store interfaces, all four types + both interfaces must change together (done for the Count* methods).
+- Watch-state expiry is service-side (`s.actionTTL`, default varies); repository counts receive the cutoff time. `Service.MetricsSnapshot()` computes cutoff as `time.Now().UTC().Add(-s.actionTTL)`.
+- `Service.SetUserWatchState` REQUIRES stream info from the enricher — with an empty fake/real enricher, channels you didn't seed get REJECTED (returns empty state silently). In tests, seed `fakeEnricher.info` with `{Exists: true}` for every login, else the service drops the write. (This bit me in TestMetricsSnapshot — initially got 0 active.)
+- Service statuses are `SubscriptionStatusActive="active"`, `SubscriptionStatusPending="pending"` (no "approved"). Public methods: `Subscribe(sub, pub)`, `RespondToSubscriber(pub, sub, approve bool) error`, `UpdatePublisherSettings(PublisherSettings)`.
+
+## Work State
+### Completed
+- `/metrics` endpoint — commit `b16161b`:
+  - `internal/metrics` package (registry + tests): `New()`, `CounterInc/CounterAdd`, `GaugeSet`, `HistogramObserve` (per-series bucket counts, `+_sum`, `+_count`), `Prometheus() []byte` text-format renderer with `# HELP`/`# TYPE`, sorted names/series, `LabelSet`, `labelParts` via `%q`, `formatFloat` via strconv. Default buckets listed above.
+  - Repository counts: added `CountActiveWatchStates(updatedAfter time.Time) int` + `CountSubscriptionsByStatus() map[service.SubscriptionStatus]int` to BOTH `service.Repository` and `repository.WatchStateStore`, implemented in `service.MemoryRepository`, `repository.ServiceAdapter` (delegates), `repository.MemoryStore`, `repository.PostgresStore`. PG SQL: `SELECT COUNT(*) FROM user_watch_state WHERE updated_at >= $1` and `SELECT status, COUNT(*) FROM subscriptions GROUP BY status`.
+  - `Service.MetricsSnapshot()` returns `{ActiveWatchStates int, SubscriptionsByStatus map[SubscriptionStatus]int}`.
+  - main.go wiring: `metrics *metrics.Registry` field (seeded in container literal), route `mux.HandleFunc("/metrics", s.handleMetrics)`, `metricsMiddleware` (statusRecorder wrapper capturing status code; labels `{method,code,route}`; `routeKey()` collapses path to first segment, `v1/` + second segment; duration histogram per route), `incThrottled(reason)` bumping `twitch_room_throttled_requests_total{reason}` — wired into `auth_ip` (rateLimitByIP), `watch_per_user` (handleWatch), `feed_per_user` (handleFeed), `share_ip` (share.go).
+  - Middleware ORDER in chain (metrics must be OUTERMOST to count 400/413/etc): `withLogging(mux)` → `MaxBodyBytes` → `SecurityHeaders` → (TLS) `ForceHTTPS` → `metricsMiddleware`. Metrics outside everything.
+  - `handleMetrics`: GET-only (405 + Allow), `s.authMiddleware.Authorized(r)` gate (401 when token configured), 503 when registry/service nil; refreshes gauges: `twitch_room_active_watch_states`, `twitch_room_subscriptions{status}`, `twitch_room_app_info{version="dev"}`; headers `text/plain; version=0.0.4; charset=utf-8` + `nosniff`.
+  - `auth.Middleware.Authorized(r)`: true when `ExpectedToken==""`; else constant-time compare of Bearer token.
+  - Tests: `TestMetricsPublicWhenNoTokenConfigured` (double scrape), `TestMetricsCountsThrottledRequests`, `TestMetricsRequiresTokenWhenConfigured` (401 none/wrong, 200 correct), `TestMetricsMiddlewareBucketsRoutesByFirstSegment` (counts 1 each because of one-behind rendering), `TestMetricsSnapshot` (service), `TestAuthorized` (auth).
+  - README: new "Metrics" section (families list + token gating) and `/metrics` API bullet.
+  - Live verified in container on :8080: 401 without token / 200 with `Bearer dev-secret-token`; `active_watch_states 1` after POST; requests_total with code/method/route (`201 POST v1/watch`, `400`, `401 metrics`, `404`); histogram route series; subscriptions gauge; app_info.
+- Trust-header hardening — `3403e29`: `ForceHTTPS(allowedHosts []string, isHTTPS func(*http.Request) bool)`; `ClientIP(r, trusted)`, `TrustedRequest(r, cidrs)`, `HTTPSRequest(r, trusted)`, `AllowedHost(host, allowed)` + `hostnameOnly`; `ALLOWED_HOSTS` + `TRUSTED_PROXY_CIDRS` config (replacing `TRUST_PROXY_HEADERS`).
+- Graceful shutdown — `794dd61`: `signal.NotifyContext(os.Interrupt, syscall.SIGTERM)`; 10s drain for main server + redirector; refresh loop exits on ctx Done.
+- Input strictness — `e81b64d`: `internal/validate` (1–100 chars `[A-Za-z0-9_-]`, `MaxIDLength=100`, `ErrInvalidUser`/`ErrInvalidStream`); enforced in auth `headerUserID`, path IDs, `requireUser`, service layer (`checkUserID`, `checkIDPair`, `MaxStreamsPerWatch=50`, post-normalize validation).
+- Share pages — `9cde7bb`: `share.go` + embedded `share_page.html`; `/u/{user_id}`; `GetPublicWatchState`, `ResolveDisplayName`, `shareLimiter` 60/min; Settings UI share link.
+- All package tests green: twitch_room, auth, config, identity, metrics, performance, repository, secrets, security, service, twitchapi, validate.
+
+### Active / Blocked
+- None. Everything committed; tree clean.
+
+## Next Move
+- Nothing pending. Natural next features if continuing: scrape `/metrics` from a Prometheus config + dashboard; version label from ldflags; more granular `v1/users` route metrics if needed; a `{reason}` for share-page vs settings limiter; or deploy notes. If the user asks about dirty-CRLF pain, options: a `.gitattributes` eol normalization commit (CAREFUL: would touch the msrv CRLF files — propose before doing), or leave as-is.
