@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -26,6 +27,12 @@ const (
 
 type Provider interface {
 	ResolveUserID(ctx context.Context, r *http.Request) (string, error)
+	// ResolveIdentity resolves the request to a user login and, when the
+	// request carries a fresh OAuth authorization code, also returns the
+	// Twitch user access token obtained during the exchange. The token is
+	// empty when identity was resolved through dev auth or an existing
+	// bearer token.
+	ResolveIdentity(ctx context.Context, r *http.Request) (userID, accessToken string, err error)
 	BuildAuthorizeURL(state string, scopes []string) (string, error)
 }
 
@@ -192,6 +199,32 @@ func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken str
 	}
 
 	return userResp.Data[0].Login, nil
+}
+
+// ResolveIdentity resolves the caller identity, attaching the freshly issued
+// user access token when the request completes the OAuth code exchange. In
+// every other path (bearer header, dev auth) the token slot is empty. A
+// present-but-invalid code fails the request rather than falling back to dev
+// auth, so a failed Twitch login never impersonates a header-supplied user.
+func (p *TwitchProvider) ResolveIdentity(ctx context.Context, r *http.Request) (string, string, error) {
+	if p.ClientID != "" && p.ClientSecret != "" && p.RedirectURI != "" {
+		code := r.URL.Query().Get("code")
+		if code != "" {
+			token, err := p.exchangeCodeForToken(ctx, code)
+			if err != nil {
+				return "", "", err
+			}
+			userID, err := p.getUserIDFromToken(ctx, token)
+			if err != nil {
+				log.Printf("WARNING: failed to get user info from token: %v", err)
+				return "", "", err
+			}
+			return userID, token, nil
+		}
+	}
+
+	userID, err := p.ResolveUserID(ctx, r)
+	return userID, "", err
 }
 
 func (p *TwitchProvider) ResolveUserID(ctx context.Context, r *http.Request) (string, error) {

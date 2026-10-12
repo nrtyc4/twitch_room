@@ -21,8 +21,9 @@ const (
 // postgresSessionBackend is used so sessions survive restarts and are shared
 // across instances.
 type sessionBackend interface {
-	save(token, userID string, expiresAt time.Time) error
+	save(token, userID, accessToken string, expiresAt time.Time) error
 	userID(token string) (string, bool)
+	accessToken(token string) (string, bool)
 	destroy(token string)
 }
 
@@ -63,37 +64,56 @@ type memorySessionBackend struct {
 }
 
 type sessionEntry struct {
-	userID    string
-	expiresAt time.Time
+	userID      string
+	accessToken string
+	expiresAt   time.Time
 }
 
 func newMemorySessionBackend() *memorySessionBackend {
 	return &memorySessionBackend{tokens: make(map[string]*sessionEntry)}
 }
 
-func (b *memorySessionBackend) save(token, userID string, expiresAt time.Time) error {
+func (b *memorySessionBackend) save(token, userID, accessToken string, expiresAt time.Time) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.tokens[token] = &sessionEntry{userID: userID, expiresAt: expiresAt}
+	b.tokens[token] = &sessionEntry{userID: userID, accessToken: accessToken, expiresAt: expiresAt}
 	return nil
 }
 
 func (b *memorySessionBackend) userID(token string) (string, bool) {
-	if token == "" {
+	entry, ok := b.entry(token)
+	if !ok {
 		return "", false
+	}
+	return entry.userID, true
+}
+
+func (b *memorySessionBackend) accessToken(token string) (string, bool) {
+	entry, ok := b.entry(token)
+	if !ok {
+		return "", false
+	}
+	return entry.accessToken, entry.accessToken != ""
+}
+
+// entry returns the live (non-expired) session entry for a token, destroying
+// expired sessions as side effect.
+func (b *memorySessionBackend) entry(token string) (*sessionEntry, bool) {
+	if token == "" {
+		return nil, false
 	}
 
 	b.mu.RLock()
 	entry, ok := b.tokens[token]
 	b.mu.RUnlock()
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
 		b.destroy(token)
-		return "", false
+		return nil, false
 	}
-	return entry.userID, true
+	return entry, true
 }
 
 func (b *memorySessionBackend) destroy(token string) {
@@ -107,26 +127,30 @@ type postgresSessionBackend struct {
 	store *repository.PostgresStore
 }
 
-func (b postgresSessionBackend) save(token, userID string, expiresAt time.Time) error {
-	return b.store.SaveSession(token, userID, expiresAt)
+func (b postgresSessionBackend) save(token, userID, accessToken string, expiresAt time.Time) error {
+	return b.store.SaveSession(token, userID, accessToken, expiresAt)
 }
 
 func (b postgresSessionBackend) userID(token string) (string, bool) {
 	return b.store.SessionUserID(token)
 }
 
+func (b postgresSessionBackend) accessToken(token string) (string, bool) {
+	return b.store.SessionAccessToken(token)
+}
+
 func (b postgresSessionBackend) destroy(token string) {
 	b.store.DeleteSession(token)
 }
 
-func (s *sessionStore) create(userID string) (string, error) {
+func (s *sessionStore) create(userID, accessToken string) (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(b)
 
-	if err := s.backend.save(token, userID, time.Now().Add(s.timeout)); err != nil {
+	if err := s.backend.save(token, userID, accessToken, time.Now().Add(s.timeout)); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -134,6 +158,16 @@ func (s *sessionStore) create(userID string) (string, error) {
 
 func (s *sessionStore) userID(token string) (string, bool) {
 	return s.backend.userID(token)
+}
+
+// accessTokenFromRequest returns the stored Twitch access token for the
+// request's session cookie, if one was attached at login time.
+func (s *sessionStore) accessTokenFromRequest(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return "", false
+	}
+	return s.backend.accessToken(cookie.Value)
 }
 
 func (s *sessionStore) destroy(token string) {
@@ -151,10 +185,12 @@ func (s *sessionStore) userIDFromRequest(r *http.Request) (string, bool) {
 }
 
 // setSessionCookie stores a new session for the user and attaches it to the
-// response. The cookie is HttpOnly, SameSite=Lax (blocks cross-site sending)
-// and Secure when served over TLS.
-func (s *sessionStore) setSessionCookie(w http.ResponseWriter, r *http.Request, userID string) error {
-	token, err := s.create(userID)
+// response. accessToken is the optional Twitch user access token captured
+// during a real OAuth login, used to power follow-based suggestions; it is
+// empty for dev-auth sessions. The cookie is HttpOnly, SameSite=Lax (blocks
+// cross-site sending) and Secure when served over TLS.
+func (s *sessionStore) setSessionCookie(w http.ResponseWriter, r *http.Request, userID, accessToken string) error {
+	token, err := s.create(userID, accessToken)
 	if err != nil {
 		return err
 	}

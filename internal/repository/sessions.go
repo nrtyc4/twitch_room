@@ -4,19 +4,21 @@ import (
 	"time"
 )
 
-// SaveSession persists an opaque session token bound to a user until it
-// expires, replacing any previous session that used the same token.
-func (ps *PostgresStore) SaveSession(token, userID string, expiresAt time.Time) error {
+// SaveSession persists an opaque session token bound to a user (and an
+// optional Twitch access token captured at login) until it expires, replacing
+// any previous session that used the same token.
+func (ps *PostgresStore) SaveSession(token, userID, accessToken string, expiresAt time.Time) error {
 	if token == "" || userID == "" {
 		return nil
 	}
 	_, err := ps.db.Exec(`
-		INSERT INTO sessions (token, user_id, expires_at)
-		VALUES ($1, $2, $3)
+		INSERT INTO sessions (token, user_id, access_token, expires_at)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (token) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
+			access_token = EXCLUDED.access_token,
 			expires_at = EXCLUDED.expires_at`,
-		token, userID, expiresAt)
+		token, userID, accessToken, expiresAt)
 	return err
 }
 
@@ -37,6 +39,25 @@ func (ps *PostgresStore) SessionUserID(token string) (string, bool) {
 		return "", false
 	}
 	return userID, true
+}
+
+// SessionAccessToken resolves a live session token to its stored Twitch
+// access token. Sessions without an attached token and expired sessions are
+// reported as missing.
+func (ps *PostgresStore) SessionAccessToken(token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	ps.reapExpiredSessions()
+
+	var accessToken string
+	err := ps.db.QueryRow(
+		`SELECT access_token FROM sessions WHERE token = $1 AND expires_at > now()`, token,
+	).Scan(&accessToken)
+	if err != nil || accessToken == "" {
+		return "", false
+	}
+	return accessToken, true
 }
 
 // DeleteSession removes a session token, invalidating it immediately.

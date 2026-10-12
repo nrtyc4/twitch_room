@@ -84,6 +84,7 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
 	ALTER TABLE user_watch_state ADD COLUMN IF NOT EXISTS streams JSONB;
+	ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_token TEXT NOT NULL DEFAULT '';
 	`
 
 	if _, err := ps.db.ExecContext(ctx, schema); err != nil {

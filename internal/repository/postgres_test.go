@@ -184,7 +184,7 @@ func TestPostgresSessionRoundTrip(t *testing.T) {
 	token := uniqueID("tok")
 	userID := uniqueID("user")
 
-	if err := ps.SaveSession(token, userID, time.Now().Add(time.Hour)); err != nil {
+	if err := ps.SaveSession(token, userID, "", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("SaveSession: %v", err)
 	}
 	t.Cleanup(func() { ps.DeleteSession(token) })
@@ -192,6 +192,18 @@ func TestPostgresSessionRoundTrip(t *testing.T) {
 	got, ok := ps.SessionUserID(token)
 	if !ok || got != userID {
 		t.Fatalf("expected session user %s, got %q (ok=%v)", userID, got, ok)
+	}
+	if _, ok := ps.SessionAccessToken(token); ok {
+		t.Fatal("expected no access token for token-less session")
+	}
+
+	// A refreshed save attaches an access token.
+	if err := ps.SaveSession(token, userID, "twitch-user-token", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("SaveSession with token: %v", err)
+	}
+	tok, ok := ps.SessionAccessToken(token)
+	if !ok || tok != "twitch-user-token" {
+		t.Fatalf("expected stored access token, got %q (ok=%v)", tok, ok)
 	}
 
 	ps.DeleteSession(token)
@@ -205,12 +217,12 @@ func TestPostgresSessionExpiresAndUpserts(t *testing.T) {
 	user := uniqueID("suser")
 
 	expired := uniqueID("expired")
-	if err := ps.SaveSession(expired, user, time.Now().Add(-time.Minute)); err != nil {
+	if err := ps.SaveSession(expired, user, "", time.Now().Add(-time.Minute)); err != nil {
 		t.Fatalf("SaveSession expired: %v", err)
 	}
 
 	valid := uniqueID("valid")
-	if err := ps.SaveSession(valid, user, time.Now().Add(time.Hour)); err != nil {
+	if err := ps.SaveSession(valid, user, "tok", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("SaveSession valid: %v", err)
 	}
 	t.Cleanup(func() {
@@ -231,7 +243,7 @@ func TestPostgresSessionExpiresAndUpserts(t *testing.T) {
 	}
 
 	// SaveSession with an existing token replaces the session (renewal).
-	if err := ps.SaveSession(valid, user, time.Now().Add(2*time.Hour)); err != nil {
+	if err := ps.SaveSession(valid, user, "tok2", time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatalf("SaveSession renewal: %v", err)
 	}
 	var rows int
