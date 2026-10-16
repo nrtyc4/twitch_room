@@ -51,19 +51,24 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | Variable | Purpose | Default in .env | Required | Notes |
 |----------|---------|-----------------|----------|-------|
 | `PORT` | Service port | `8080` | No | Container exposed port. |
+| `ALLOW_DEV_AUTH` | Enable `X-User-ID` auth for development | `true` | No | Refuses to start if `APP_ENV=production`. |
+| `WATCH_STATE_TTL_MINUTES` | Lifetime of a published watch state | `5` | No | |
+| `WATCH_REFRESH_SECONDS` | How often Twitch metadata is re-resolved | `60` | No | Only active when Twitch enrichment is enabled. |
 | `DATABASE_DSN` | PostgreSQL connection string | (Must be set) | Yes | Format: `postgres://user:pass@host:port/dbname` |
-| `TWITCH_CLIENT_ID` | Twitch OAuth client ID | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
-| `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
-| `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | Must match the service's expected environment variable. |
-| `APP_REDIRECT_AFTER_LOGIN` | Post-login URL in the app | `/` | No | Browser is redirected here with `?user_id=...` after OAuth. |
-| `WATCH_REFRESH_SECONDS` | How often Twitch metadata is re-resolved for published states | `60` | No | Only active when Twitch enrichment is enabled. Refreshing metadata does not extend a state's lifetime. |
-| `TLS_ENABLED` | Serve HTTPS directly using `TLS_CERT_FILE`/`TLS_KEY_FILE` | `false` | For HTTPS | Enables HSTS and HTTP→HTTPS redirects on the TLS listener. |
-| `TLS_CERT_FILE` / `TLS_KEY_FILE` | PEM certificate and key paths | (empty) | With `TLS_ENABLED` | Loaded by the HTTPS listener. |
-| `TLS_REDIRECT_PORT` | Optional plain-HTTP port that 301s to HTTPS | (empty) | No | e.g. `80` → HTTPS on `PORT`. |
-| `COOKIE_SECURE` | Force `Secure` on session cookies | `false` | Behind a TLS proxy | Set when TLS terminates at a reverse proxy so cookies are still Secure. |
-| `TRUSTED_PROXY_CIDRS` | Comma-separated proxy networks (`10.0.0.0/8`) whose `X-Forwarded-For`/`X-Forwarded-Proto` headers are honoured | (empty) | Behind a proxy | Empty trusts nobody; forwarded headers are ignored unless the connection source matches. |
-| `ALLOWED_HOSTS` | Comma-separated list of Host values redirected to by the HTTPS redirector | (empty) | No | Requests for other hosts get `400` (prevents host-header injection / open redirects). |
-| `APP_ENV` | `production` or empty | (empty) | No | Refuses to start if combined with `ALLOW_DEV_AUTH=true`. |
+| `TWITCH_CLIENT_ID` | Twitch OAuth client ID | (Must be set) | For real OAuth | |
+| `TWITCH_CLIENT_SECRET` | Twitch OAuth client secret | (Must be set) | For real OAuth | |
+| `TWITCH_REDIRECT_URI` | Twitch OAuth redirect URI | (Must be set) | For real OAuth | |
+| `APP_REDIRECT_AFTER_LOGIN` | Post-login URL in the app | `/` | No | Browser is redirected here with `?user_id=...` |
+| `TWITCH_ROOM_AUTH_TOKEN` | Static token for Bearer authentication | (empty) | No | For `Authorization: Bearer <token>`. |
+| `TLS_ENABLED` | Serve HTTPS directly | `false` | For HTTPS | Enables HSTS and HTTP→HTTPS redirects. |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | PEM certificate and key paths | (empty) | With `TLS_ENABLED` | |
+| `TLS_REDIRECT_PORT` | Plain-HTTP port that 301s to HTTPS | (empty) | No | e.g. `80` → HTTPS on `PORT`. |
+| `COOKIE_SECURE` | Force `Secure` on session cookies | `false` | Behind a TLS proxy | |
+| `TRUSTED_PROXY_CIDRS` | Comma-separated proxy networks | (empty) | Behind a proxy | |
+| `ALLOWED_HOSTS` | Comma-separated list of Host values | (empty) | No | |
+| `ALLOWED_ORIGINS` | Comma-separated list of CORS origins | (empty) | No | |
+| `APP_ENV` | `production` or empty | (empty) | No | |
+| `LOG_LEVEL` | Logging verbosity | `info` | No | |
 
 ## Authentication
 
@@ -134,7 +139,7 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 - `DELETE /v1/watch` — stop watching (clears your published watch state)
 - `GET /v1/users/{user_id}/watch` — read a user's watch state (self, public publishers, or active subscribers)
 - `GET /v1/feed` — feed of active subscriptions
-- `GET|PUT /v1/settings` — read or update `subscription_mode` and `visibility`
+- `GET|PUT|POST /v1/settings` — read or update `subscription_mode` and `visibility`
 - `GET /v1/subscriptions` — list the current user's subscriptions
 - `POST /v1/subscriptions/{publisher_id}` — subscribe (201 if open, 202 if pending approval)
 - `DELETE /v1/subscriptions/{publisher_id}` — unsubscribe
@@ -143,6 +148,8 @@ The UI authenticates with the `X-User-ID` header (dev auth) or automatically via
 - `POST /v1/subscription_requests/{user_id}/reject` — reject a pending request
 - `GET /auth/twitch`
 - `GET /auth/twitch/callback`
+- `GET /auth/me` — report the current session user
+- `POST /auth/logout` — destroy the session
 
 ### Input strictness
 
