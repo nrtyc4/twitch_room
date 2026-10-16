@@ -25,14 +25,14 @@ func (f *fakeEnricher) LookupStreams(ctx context.Context, logins []string) (map[
 	return out, nil
 }
 
-func (f *fakeEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
+func (f *fakeEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]UserInfo, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make(map[string]string, len(userIDs))
+	out := make(map[string]UserInfo, len(userIDs))
 	for _, id := range userIDs {
 		if name, ok := f.users[id]; ok {
-			out[id] = name
+			out[id] = UserInfo{DisplayName: name}
 		}
 	}
 	return out, nil

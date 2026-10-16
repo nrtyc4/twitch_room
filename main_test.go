@@ -184,10 +184,10 @@ func (f *fakeShareEnricher) LookupStreams(ctx context.Context, logins []string) 
 	return out, nil
 }
 
-func (f *fakeShareEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
-	out := make(map[string]string, len(userIDs))
+func (f *fakeShareEnricher) ResolveUsers(ctx context.Context, userIDs []string) (map[string]service.UserInfo, error) {
+	out := make(map[string]service.UserInfo, len(userIDs))
 	for _, id := range userIDs {
-		out[strings.ToLower(id)] = "Best Publisher"
+		out[strings.ToLower(id)] = service.UserInfo{DisplayName: "Best Publisher"}
 	}
 	return out, nil
 }
@@ -285,7 +285,7 @@ func TestHandlerChainSetsSecurityHeaders(t *testing.T) {
 
 	var handler http.Handler = withLogging(mux)
 	handler = security.MaxBodyBytes(1 << 20)(handler)
-	handler = security.SecurityHeaders(true)(handler)
+	handler = security.SecurityHeaders(true, nil)(handler)
 
 	testServer := httptest.NewServer(handler)
 	defer testServer.Close()

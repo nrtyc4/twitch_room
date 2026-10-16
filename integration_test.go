@@ -601,6 +601,7 @@ type stubProvider struct {
 	resolveErr     error
 	authorizeURL   string
 	authorizeErr   error
+	resolvedProfile identity.UserProfile
 }
 
 func (s *stubProvider) ResolveUserID(ctx context.Context, r *http.Request) (string, error) {
@@ -613,6 +614,10 @@ func (s *stubProvider) ResolveIdentity(ctx context.Context, r *http.Request) (st
 
 func (s *stubProvider) BuildAuthorizeURL(state string, scopes []string) (string, error) {
 	return s.authorizeURL, s.authorizeErr
+}
+
+func (s *stubProvider) ResolveProfile(ctx context.Context, r *http.Request) (identity.UserProfile, error) {
+	return s.resolvedProfile, s.resolveErr
 }
 
 // TestIntegrationTwitchLoginCallbackFlow tests the /auth/twitch login redirect
