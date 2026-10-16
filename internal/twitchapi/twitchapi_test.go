@@ -202,12 +202,12 @@ func TestResolveUsers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveUsers returned error: %v", err)
 	}
-	if names["shroud"] != "Shroud" {
-		t.Fatalf("expected shroud -> Shroud, got %q", names["shroud"])
+	if names["shroud"].DisplayName != "Shroud" {
+		t.Fatalf("expected shroud -> Shroud, got %+v", names["shroud"])
 	}
-	if names["xqc"] != "" {
+	if names["xqc"].DisplayName != "" {
 		// xqc wasn't queried: not in this call's input.
-		t.Fatalf("expected no xqc entry, got %q", names["xqc"])
+		t.Fatalf("expected no xqc entry, got %+v", names["xqc"])
 	}
 	if _, ok := names["ghost"]; ok {
 		t.Fatal("expected unresolvable id to be absent")

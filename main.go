@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -102,21 +102,38 @@ func main() {
 
 	// Load secrets (optional .env file for local development)
 	if err := secrets.LoadDotEnv(".env"); err != nil {
-		log.Printf("Warning: could not load .env file: %v", err)
+		slog.Warn("could not load .env file", "error", err)
 	}
 
 	// Load secrets from environment
 	sec, err := secrets.Load()
 	if err != nil {
-		log.Fatalf("Failed to load secrets: %v", err)
+		slog.Error("failed to load secrets", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Secrets loaded: %s", sec)
+	slog.Info("secrets loaded")
 
 	cfg := config.Load()
 
+	// Initialize structured logging with the configured level.
+	var level slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
+
 	if cfg.AllowDevAuth && cfg.AppEnv == "production" {
-		log.Fatal("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
+		slog.Error("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
+		os.Exit(1)
 	}
 
 	// Stop serving gracefully when the process receives an interrupt or a
@@ -132,16 +149,16 @@ func main() {
 	if dbDSN != "" {
 		pgStore, err := repository.NewPostgresStore(dbDSN)
 		if err != nil {
-			log.Printf("WARNING: failed to connect to PostgreSQL: %v, falling back to in-memory store", err)
+			slog.Warn("failed to connect to PostgreSQL, falling back to in-memory store", "error", err)
 			store = repository.NewMemoryStore()
 		} else {
-			log.Printf("Connected to PostgreSQL database")
+			slog.Info("connected to PostgreSQL database")
 			store = pgStore
 			// Optionally defer cleanup (commented out for now as it would close on every request)
 			// defer pgStore.Close()
 		}
 	} else {
-		log.Printf("No database DSN configured, using in-memory store")
+		slog.Info("no database DSN configured, using in-memory store")
 		store = repository.NewMemoryStore()
 	}
 
@@ -162,7 +179,7 @@ func main() {
 		enricher := twitchapi.NewClient(sec.TwitchClientID, sec.TwitchClientSecret)
 		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher)
 		suggestor = enricher
-		log.Printf("Twitch enrichment enabled")
+		slog.Info("Twitch enrichment enabled")
 	}
 
 	// Create identity provider with Twitch OAuth configuration.
@@ -194,12 +211,12 @@ func main() {
 					refreshed, err := svc.RefreshWatchStates(refCtx)
 					cancel()
 					if err != nil {
-						log.Printf("watch state refresh failed: %v", err)
+						slog.Error("watch state refresh failed", "error", err)
 						continue
 					}
 					if len(refreshed) > 0 {
 						watchStateCache.InvalidateAll()
-						log.Printf("refreshed metadata for %d watch state(s)", len(refreshed))
+						slog.Info("refreshed metadata", "count", len(refreshed))
 					}
 				}
 			}
@@ -241,21 +258,23 @@ func main() {
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 	mux.HandleFunc("/auth/me", s.handleMe)
 	mux.HandleFunc("/auth/logout", s.handleLogout)
-	mux.HandleFunc("/u/", s.handleSharePage)
+	// The share page (/u/{user_id}) is no longer served as part of the headless API.
 
 	webHandler, err := newWebHandler()
 	if err != nil {
-		log.Fatalf("failed to init web handler: %v", err)
+		slog.Error("failed to init web handler", "error", err)
+		os.Exit(1)
 	}
 	mux.Handle("/", webHandler)
 
-	log.Printf("twitch-room service starting on :%s", cfg.Port)
+	slog.Info("twitch-room service starting", "port", cfg.Port)
 
 	// Middleware chain: HTTPS enforcement (when TLS is on), security headers,
 	// response logging, request metrics, and a global cap on request bodies.
 	var handler http.Handler = withLogging(mux)
+	handler = security.CORS(cfg.AllowedOrigins)(handler)
 	handler = security.MaxBodyBytes(1 << 20)(handler)
-	handler = security.SecurityHeaders(cfg.TLSEnabled)(handler)
+	handler = security.SecurityHeaders(cfg.TLSEnabled, cfg.AllowedOrigins)(handler)
 	if cfg.TLSEnabled {
 		trusted := func(r *http.Request) bool { return security.TrustedRequest(r, cfg.TrustedProxyCIDRs) }
 		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
@@ -274,7 +293,8 @@ func main() {
 	}
 
 	if cfg.TLSEnabled && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
-		log.Fatal("TLS_ENABLED is true but TLS_CERT_FILE / TLS_KEY_FILE are not set")
+		slog.Error("TLS_ENABLED is true but TLS_CERT_FILE / TLS_KEY_FILE are not set")
+		os.Exit(1)
 	}
 
 	// Optionally keep a plain-HTTP redirector running alongside the HTTPS
@@ -294,9 +314,9 @@ func main() {
 			IdleTimeout:       60 * time.Second,
 		}
 		go func() {
-			log.Printf("http->https redirector starting on :%s", cfg.TLSPort)
+			slog.Info("http->https redirector starting", "port", cfg.TLSPort)
 			if err := redirector.ListenAndServe(); err != nil {
-				log.Printf("redirector failed: %v", err)
+				slog.Error("redirector failed", "error", err)
 			}
 		}()
 	}
@@ -314,20 +334,21 @@ func main() {
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server failed: %v", err)
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
 		}
 	case <-ctx.Done():
-		log.Printf("shutdown signal received, draining connections")
+		slog.Info("shutdown signal received, draining connections")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if redirector != nil {
 			_ = redirector.Shutdown(shutdownCtx)
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("graceful shutdown failed: %v", err)
+			slog.Error("graceful shutdown failed", "error", err)
 			_ = srv.Close()
 		}
-		log.Printf("server stopped")
+		slog.Info("server stopped")
 	}
 }
 
@@ -344,6 +365,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // global size limit are answered with 413; malformed JSON gets a 400.
 func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		slog.Error("decodeJSON error", "error", err)
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
@@ -356,18 +378,23 @@ func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) boo
 }
 
 func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
+	slog.Debug("handleWatch started", "method", r.Method)
 	userID, ok := s.requireUser(r)
 	if !ok {
+		slog.Debug("handleWatch: requireUser failed")
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+	slog.Debug("handleWatch: userID", "userID", userID)
 	if !s.rateLimiter.Allow(userID) {
+		slog.Debug("handleWatch: rate limit exceeded", "userID", userID)
 		s.incThrottled("watch_per_user")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 
 	if r.Method == http.MethodDelete {
+		slog.Debug("handleWatch: method is DELETE")
 		if err := s.watchService.ClearUserWatchState(userID); err != nil {
 			if errors.Is(err, service.ErrUserNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "watch state not found"})
@@ -382,11 +409,14 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
+		slog.Debug("handleWatch: method is GET")
 		// Try cache first
 		if cached, ok := s.watchStateCache.Get(userID); ok {
+			slog.Debug("handleWatch: cache hit", "userID", userID)
 			writeJSON(w, http.StatusOK, cached)
 			return
 		}
+		slog.Debug("handleWatch: cache miss", "userID", userID)
 
 		// Cache miss - fetch from service
 		state, err := s.watchService.GetUserWatchState(userID)
@@ -406,17 +436,22 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		slog.Debug("handleWatch: method not allowed", "method", r.Method)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
+	slog.Debug("handleWatch: entering decodeJSON")
 	var payload watchRequest
 	if !s.decodeJSON(w, r, &payload) {
+		slog.Debug("handleWatch: decodeJSON failed")
 		return
 	}
+	slog.Debug("handleWatch: payload decoded", "payload", payload)
 
 	state, err := s.watchService.SetUserWatchState(userID, payload.StreamIDs)
 	if err != nil {
+		slog.Error("handleWatch: SetUserWatchState error", "error", err)
 		if errors.Is(err, service.ErrInvalidStream) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid stream IDs: expected 1-100 characters of letters, digits, '_' or '-' (up to 50)"})
 			return
@@ -714,7 +749,7 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 	// user follows that are live right now, so publishing is one click.
 	authURL, err := s.identityProvider.BuildAuthorizeURL(state, []string{"user:read:follows"})
 	if err != nil {
-		log.Printf("failed to build authorize URL: %v", err)
+		slog.Error("failed to build authorize URL", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "OAuth not configured"})
 		return
 	}
@@ -745,7 +780,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 
 	userID, accessToken, err := s.identityProvider.ResolveIdentity(r.Context(), r)
 	if err != nil {
-		log.Printf("failed to resolve user id from OAuth code: %v", err)
+		slog.Error("failed to resolve user id from OAuth code", "error", err)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication failed"})
 		return
 	}
@@ -756,7 +791,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 	// Twitch on the user's behalf.
 	if s.sessions != nil {
 		if err := s.sessions.setSessionCookie(w, r, userID, accessToken); err != nil {
-			log.Printf("failed to create session: %v", err)
+			slog.Error("failed to create session", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 			return
 		}
@@ -786,6 +821,22 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+
+	// Fetch full profile if identity provider is available
+	if s.identityProvider != nil {
+		profile, err := s.identityProvider.ResolveProfile(r.Context(), r)
+		if err == nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"user_id":      userID,
+				"display_name": profile.DisplayName,
+				"avatar_url":   profile.AvatarURL,
+			})
+			return
+		}
+		// If profile fetch fails, at least return user_id
+		slog.Error("could not fetch profile", "user_id", userID, "error", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"user_id": userID})
 }
 
@@ -953,7 +1004,7 @@ func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 	})
 }
 
@@ -969,7 +1020,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		log.Printf("failed to encode JSON response: %v", err)
+		slog.Error("failed to encode JSON response", "error", err)
 	}
 }
 

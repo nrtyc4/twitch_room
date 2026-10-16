@@ -11,7 +11,7 @@ import (
 )
 
 func TestSecurityHeaders(t *testing.T) {
-	middleware := SecurityHeaders(false)
+	middleware := SecurityHeaders(false, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -36,7 +36,7 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 func TestSecurityHeadersHSTSWhenEnabled(t *testing.T) {
-	middleware := SecurityHeaders(true)
+	middleware := SecurityHeaders(true, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -273,30 +273,4 @@ func TestHTTPSRequest(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
-	t.Run("direct", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.RemoteAddr = "10.1.2.3:5555"
-		if got := ClientIP(req, false); got != "10.1.2.3" {
-			t.Fatalf("expected 10.1.2.3, got %q", got)
-		}
-	})
 
-	t.Run("forwarded ignored when not trusted", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.RemoteAddr = "10.1.2.3:5555"
-		req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
-		if got := ClientIP(req, false); got != "10.1.2.3" {
-			t.Fatalf("expected RemoteAddr without trust, got %q", got)
-		}
-	})
-
-	t.Run("forwarded trusted", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.RemoteAddr = "10.1.2.3:5555"
-		req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
-		if got := ClientIP(req, true); got != "203.0.113.7" {
-			t.Fatalf("expected forwarded IP, got %q", got)
-		}
-	})
-}

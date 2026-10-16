@@ -90,6 +90,7 @@ type UserWatchState struct {
 type FeedEntry struct {
 	UserID      string    `json:"user_id"`
 	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
 	Streams     []Stream  `json:"streams"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -118,10 +119,16 @@ type StreamEnricher interface {
 	LookupStreams(ctx context.Context, logins []string) (map[string]StreamInfo, error)
 }
 
-// UserResolver resolves user IDs to human-readable display names. It is
-// optional: entries whose name cannot be resolved keep their raw user ID.
+// UserResolver resolves user IDs to human-readable display names and avatars. It is
+// optional: entries whose info cannot be resolved keep their raw user ID and no avatar.
+// Results are cached by the implementing client.
 type UserResolver interface {
-	ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error)
+	ResolveUsers(ctx context.Context, userIDs []string) (map[string]UserInfo, error)
+}
+
+type UserInfo struct {
+	DisplayName string
+	AvatarURL   string
 }
 
 type Repository interface {
@@ -401,8 +408,8 @@ func (s *Service) GetPublicWatchState(publisherID string) (UserWatchState, error
 func (s *Service) ResolveDisplayName(userID string) string {
 	if resolver, ok := s.enricher.(UserResolver); ok && userID != "" {
 		if names, err := resolver.ResolveUsers(context.Background(), []string{userID}); err == nil {
-			if name, ok := names[strings.ToLower(userID)]; ok && name != "" {
-				return name
+			if info, ok := names[strings.ToLower(userID)]; ok && info.DisplayName != "" {
+				return info.DisplayName
 			}
 		}
 	}
@@ -490,8 +497,9 @@ func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 		}
 		names, _ := resolver.ResolveUsers(context.Background(), ids)
 		for i := range entries {
-			if name, ok := names[strings.ToLower(entries[i].UserID)]; ok && name != "" {
-				entries[i].DisplayName = name
+			if info, ok := names[strings.ToLower(entries[i].UserID)]; ok && info.DisplayName != "" {
+				entries[i].DisplayName = info.DisplayName
+				entries[i].AvatarURL = info.AvatarURL
 			}
 		}
 	}

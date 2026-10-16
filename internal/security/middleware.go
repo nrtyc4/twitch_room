@@ -4,13 +4,14 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"strings"
 )
 
 // SecurityHeaders returns middleware that sets security-related response
 // headers. enableHSTS additionally emits a Strict-Transport-Security header,
 // which should only be sent over HTTPS.
-func SecurityHeaders(enableHSTS bool) func(http.Handler) http.Handler {
+func SecurityHeaders(enableHSTS bool, allowedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
@@ -18,7 +19,14 @@ func SecurityHeaders(enableHSTS bool) func(http.Handler) http.Handler {
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("Cross-Origin-Opener-Policy", "same-origin")
-			h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' https://static-cdn.jtvnw.net; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+
+			csp := "default-src 'self'; img-src 'self' https://static-cdn.jtvnw.net; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+			if len(allowedOrigins) > 0 {
+				// Append allowed origins to connect-src to allow extension communication
+				csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+strings.Join(allowedOrigins, " "), 1)
+			}
+			h.Set("Content-Security-Policy", csp)
+
 			if enableHSTS {
 				h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			}
@@ -27,9 +35,66 @@ func SecurityHeaders(enableHSTS bool) func(http.Handler) http.Handler {
 	}
 }
 
-// MaxBodyBytes returns middleware that caps the request body size, answering
-// with http.StatusRequestEntityTooLarge when the limit is exceeded. Reading is
-// left to the handler; only the Content-Length is checked eagerly.
+// CORS returns middleware that handles Cross-Origin Resource Sharing.
+func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
+	type originMatcher struct {
+		exact string
+		re    *regexp.Regexp
+	}
+	matchers := make([]originMatcher, 0, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		if strings.Contains(o, "*") {
+			pattern := regexp.QuoteMeta(o)
+			pattern = strings.ReplaceAll(pattern, "\\*", ".*")
+			re, err := regexp.Compile("^" + pattern + "$")
+			if err == nil {
+				matchers = append(matchers, originMatcher{re: re})
+			}
+		} else {
+			matchers = append(matchers, originMatcher{exact: o})
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			allowed := false
+			for _, m := range matchers {
+				if m.exact != "" && m.exact == origin {
+					allowed = true
+					break
+				}
+				if m.re != nil && m.re.MatchString(origin) {
+					allowed = true
+					break
+				}
+			}
+
+			if !allowed {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-User-ID")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func MaxBodyBytes(limit int64) func(http.Handler) http.Handler {
 	if limit <= 0 {
 		limit = 1 << 20

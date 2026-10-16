@@ -15,6 +15,7 @@ type Config struct {
 	WatchRefreshSeconds int
 	DatabaseDSN         string
 	RedirectAfterLogin  string
+	LogLevel            string
 
 	// AppEnv is "production" or ""/"development". It gates warnings about
 	// development-only settings.
@@ -36,6 +37,10 @@ type Config struct {
 	// AllowedHosts is the whitelist of Host header values the service may
 	// redirect to (HTTP->HTTPS and OAuth redirects). Empty accepts any host.
 	AllowedHosts []string
+
+	// AllowedOrigins is the whitelist of Cross-Origin Resource Sharing (CORS)
+	// origins allowed to access the API. Empty accepts any origin.
+	AllowedOrigins []string
 
 	// TrustedProxyCIDRs lists the networks whose X-Forwarded-For and
 	// X-Forwarded-Proto headers the service honours. Empty trusts nobody,
@@ -76,6 +81,10 @@ func Load() Config {
 	}
 
 	appEnv := os.Getenv("APP_ENV")
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
 
 	tlsEnabled := boolEnv("TLS_ENABLED")
 	secureCookies := boolEnv("COOKIE_SECURE")
@@ -89,12 +98,14 @@ func Load() Config {
 		DatabaseDSN:         os.Getenv("DATABASE_DSN"),
 		RedirectAfterLogin:  redirectAfterLogin,
 		AppEnv:              appEnv,
+		LogLevel:            logLevel,
 		TLSEnabled:          tlsEnabled,
 		TLSCertFile:         os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:          os.Getenv("TLS_KEY_FILE"),
 		TLSPort:             os.Getenv("TLS_REDIRECT_PORT"),
 		SecureCookies:       secureCookies,
 		AllowedHosts:         splitList(os.Getenv("ALLOWED_HOSTS")),
+		AllowedOrigins:       splitList(os.Getenv("ALLOWED_ORIGINS")),
 		TrustedProxyCIDRs:    parseCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS")),
 	}
 }

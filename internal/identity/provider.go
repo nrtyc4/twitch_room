@@ -25,6 +25,12 @@ const (
 	TwitchUserInfoURL  = "https://api.twitch.tv/helix/users"
 )
 
+type UserProfile struct {
+	ID          string
+	DisplayName string
+	AvatarURL   string
+}
+
 type Provider interface {
 	ResolveUserID(ctx context.Context, r *http.Request) (string, error)
 	// ResolveIdentity resolves the request to a user login and, when the
@@ -33,6 +39,8 @@ type Provider interface {
 	// empty when identity was resolved through dev auth or an existing
 	// bearer token.
 	ResolveIdentity(ctx context.Context, r *http.Request) (userID, accessToken string, err error)
+	// ResolveProfile fetches the full profile (name, avatar) for the authenticated user.
+	ResolveProfile(ctx context.Context, r *http.Request) (UserProfile, error)
 	BuildAuthorizeURL(state string, scopes []string) (string, error)
 }
 
@@ -54,8 +62,10 @@ type twitchTokenResponse struct {
 
 type twitchUserResponse struct {
 	Data []struct {
-		ID    string `json:"id"`
-		Login string `json:"login"`
+		ID           string `json:"id"`
+		Login        string `json:"login"`
+		DisplayName  string `json:"display_name"`
+		ProfileImage string `json:"profile_image_url"`
 	} `json:"data"`
 }
 
@@ -114,7 +124,57 @@ func (p *TwitchProvider) httpClientOrDefault() *http.Client {
 	return http.DefaultClient
 }
 
-// exchangeCodeForToken performs the OAuth 2.0 authorization code exchange with Twitch.
+// ResolveProfile fetches the full profile (name, avatar) for the authenticated user.
+func (p *TwitchProvider) ResolveProfile(ctx context.Context, r *http.Request) (UserProfile, error) {
+	userID, err := p.ResolveUserID(ctx, r)
+	if err != nil {
+		return UserProfile{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, TwitchUserInfoURL, nil)
+	if err != nil {
+		return UserProfile{}, fmt.Errorf("failed to create user info request: %w", err)
+	}
+
+	q := req.URL.Query()
+	q.Add("user_id", userID)
+	req.URL.RawQuery = q.Encode()
+
+	req.Header.Set("Client-ID", p.ClientID)
+
+	resp, err := p.httpClientOrDefault().Do(req)
+	if err != nil {
+		return UserProfile{}, fmt.Errorf("failed to fetch user info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return UserProfile{}, fmt.Errorf("received status %d from Twitch API: %s", resp.StatusCode, string(bodySnippet))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return UserProfile{}, fmt.Errorf("failed to read user info response: %w", err)
+	}
+
+	var userResp twitchUserResponse
+	if err := json.Unmarshal(body, &userResp); err != nil {
+		return UserProfile{}, fmt.Errorf("failed to parse user info response: %w", err)
+	}
+
+	if len(userResp.Data) == 0 {
+		return UserProfile{}, fmt.Errorf("no user data in response")
+	}
+
+	data := userResp.Data[0]
+	return UserProfile{
+		ID:          data.ID,
+		DisplayName: data.DisplayName,
+		AvatarURL:   data.ProfileImage,
+	}, nil
+}
+
 func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) (string, error) {
 	if p.ClientID == "" || p.ClientSecret == "" {
 		return "", fmt.Errorf("%w: missing client credentials", ErrInvalidIdentity)

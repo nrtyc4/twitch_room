@@ -42,6 +42,7 @@ type Client struct {
 
 type userCacheEntry struct {
 	displayName string
+	avatarURL   string
 	fetchedAt   time.Time
 }
 
@@ -217,6 +218,7 @@ type helixUser struct {
 	ID          string `json:"id"`
 	Login       string `json:"login"`
 	DisplayName string `json:"display_name"`
+	ProfileImage string `json:"profile_image_url"`
 }
 
 func (c *Client) fetchUsers(ctx context.Context, logins []string) ([]helixUser, error) {
@@ -364,21 +366,24 @@ func sizedThumbnail(template string) string {
 // unresolvable IDs are absent from the map. Results are cached for the TTL so
 // repeated feed reads do not hammer the users endpoint, and lookups are
 // chunked to Helix's per-request filter limit.
-func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string]string, error) {
+func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string]service.UserInfo, error) {
 	unique := dedupeLogins(userIDs)
 	if len(unique) == 0 {
-		return map[string]string{}, nil
+		return map[string]service.UserInfo{}, nil
 	}
 	now := time.Now()
 
-	out := make(map[string]string, len(unique))
+	out := make(map[string]service.UserInfo, len(unique))
 
 	c.usersMu.Lock()
 	var missing []string
 	for _, id := range unique {
 		if entry, ok := c.userCache[id]; ok && now.Sub(entry.fetchedAt) < userCacheTTL {
 			if entry.displayName != "" {
-				out[id] = entry.displayName
+				out[id] = service.UserInfo{
+					DisplayName: entry.displayName,
+					AvatarURL:   entry.avatarURL,
+				}
 			}
 			continue
 		}
@@ -397,8 +402,6 @@ func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string
 		}
 		users, err := c.fetchUsers(ctx, missing[i:end])
 		if err != nil {
-			// Return whatever was already resolved; the caller degrades to
-			// raw IDs for the rest.
 			return out, err
 		}
 		c.usersMu.Lock()
@@ -407,8 +410,15 @@ func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string
 		}
 		for _, u := range users {
 			key := strings.ToLower(u.Login)
-			c.userCache[key] = userCacheEntry{displayName: u.DisplayName, fetchedAt: now}
-			out[key] = u.DisplayName
+			c.userCache[key] = userCacheEntry{
+				displayName: u.DisplayName,
+				avatarURL:   u.ProfileImage,
+				fetchedAt:   now,
+			}
+			out[key] = service.UserInfo{
+				DisplayName: u.DisplayName,
+				AvatarURL:   u.ProfileImage,
+			}
 		}
 		c.usersMu.Unlock()
 	}
