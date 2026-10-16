@@ -6,3 +6,11 @@ bin/
 # Environment files
 .env
 .env.*
+
+# Logs and temporary files
+*.log
+server.log
+current_changes.diff
+test_request.py
+verify_all.py
+goProjects/
