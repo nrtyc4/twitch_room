@@ -1,0 +1,5 @@
+services:
+  twitch-room:
+    environment:
+      ALLOW_DEV_AUTH: "false"
+      TWITCH_ROOM_AUTH_TOKEN: "prod-secret-token"

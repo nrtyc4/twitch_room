@@ -1,0 +1,247 @@
+:root {
+  --twitch-purple: #9146FF;
+  --twitch-dark: #18181b;
+  --twitch-light: #efeff1;
+  --twitch-success: #00f593;
+  --twitch-error: #ff4f4f;
+  --twitch-gray: #303036;
+  --twitch-text: #efeff1;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--twitch-dark);
+  color: var(--twitch-text);
+  overflow-x: hidden;
+}
+
+.container {
+  padding: 16px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: var(--twitch-gray);
+}
+
+.logo-text {
+  font-size: 1.2rem;
+  margin: 0;
+  color: var(--twitch-purple);
+}
+
+.logo-subtext {
+  font-size: 0.7rem;
+  margin: 0;
+  opacity: 0.6;
+}
+
+h2, h3 {
+  font-size: 1rem;
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--twitch-light);
+}
+
+.status-card, .feed-section, .settings-section {
+  background-color: var(--twitch-gray);
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.watching-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+#watching-text {
+  margin: 0;
+  font-weight: 500;
+}
+
+.pulse-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  background-color: var(--twitch-success);
+  border-radius: 50%;
+}
+
+.pulse-animation {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.9); opacity: 1; }
+  70% { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(0.9); opacity: 0; }
+}
+
+.btn {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 8px;
+  transition: background-color 0.2s;
+}
+
+.btn-secondary {
+  background-color: transparent;
+  border: 1px solid var(--twitch-purple);
+  color: var(--twitch-purple);
+}
+
+.btn-secondary:hover {
+  background-color: rgba(145, 70, 255, 0.1);
+}
+
+.btn:not(.btn-secondary) {
+  background-color: var(--twitch-purple);
+  color: white;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-message {
+  font-size: 0.8rem;
+  min-height: 1.2rem;
+  text-align: center;
+}
+
+.error-text { color: var(--twitch-error); }
+.success-text { color: var(--twitch-success); }
+
+.settings-section .form-group {
+  margin-bottom: 12px;
+}
+
+.settings-section label {
+  display: block;
+  font-size: 0.75rem;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.settings-section input {
+  width: 100%;
+  padding: 6px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  border: 1px solid var(--twitch-gray);
+  background-color: var(--twitch-dark);
+  color: white;
+}
+
+/* Feed Styles */
+.feed-section {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.feed-title {
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--twitch-gray);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.feed-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feed-item {
+  display: flex;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.feed-item:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.feed-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  background-color: var(--twitch-gray);
+}
+
+.feed-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.feed-user-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.feed-user-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--twitch-purple);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feed-activity-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.feed-activity {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feed-stream-meta {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.feed-empty-msg {
+  font-size: 0.8rem;
+  opacity: 0.5;
+  text-align: center;
+  margin: 20px 0;
+}

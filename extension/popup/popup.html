@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Twitch Room</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="https://www.twitch.tv/favicon.ico" alt="Twitch" class="user-avatar" id="user-avatar">
+      <div class="logo-area">
+        <h1 class="logo-text">Twitch Room</h1>
+        <p class="logo-subtext">Companion Extension</p>
+      </div>
+    </header>
+
+    <main>
+      <div class="status-card">
+        <h2>Current Status</h2>
+        <div class="watching-info">
+          <div class="pulse-container" id="pulse-container" style="display: none;">
+            <div class="pulse-dot pulse-animation"></div>
+            <span style="font-size: 0.7rem; color: var(--twitch-success);">LIVE</span>
+          </div>
+          <p id="watching-text">Not watching anything</p>
+        </div>
+        <button id="sync-btn" class="btn">Sync Now</button>
+        <button id="copy-link-btn" class="btn btn-secondary">Copy Public Link</button>
+        <div id="status-message" class="status-message"></div>
+      </div>
+    </main>
+
+    <section class="feed-section">
+      <h3 class="feed-title">Friends Activity</h3>
+      <div id="feed-container" class="feed-container">
+        <p class="feed-empty-msg">Loading activity...</p>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h3 class="settings-title">Configuration</h3>
+      <div class="form-group">
+        <label for="auth-token">Auth Token</label>
+        <input type="password" id="auth-token" placeholder="Enter Bearer token">
+      </div>
+      <div class="form-group">
+        <label for="user-id">User ID</label>
+        <input type="text" id="user-id" placeholder="Enter your User ID">
+      </div>
+      <button id="save-settings-btn" class="btn btn-secondary">Save Settings</button>
+    </section>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
