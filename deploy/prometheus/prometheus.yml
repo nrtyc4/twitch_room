@@ -1,0 +1,35 @@
+# Prometheus configuration for scraping twitch-room.
+#
+# This file is baked into the image built from this directory (see Dockerfile)
+# rather than bind-mounted from the host, so the compose stack also works where
+# Docker Desktop does not share the host filesystem with the daemon.
+#
+# The metrics bearer token is injected at startup by docker-entrypoint.sh, which
+# writes the file named by credentials_file below from TWITCH_ROOM_AUTH_TOKEN —
+# the same variable the service itself reads. When that variable is empty the
+# /metrics endpoint is public, and the entrypoint drops this whole authorization
+# block instead of sending empty credentials.
+#
+# To change the interval, targets or token handling, edit this file and rebuild:
+#   docker compose up --build
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/twitch_room_alerts.yml
+
+scrape_configs:
+  - job_name: twitch-room
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/prometheus/metrics_token
+    static_configs:
+      - targets:
+          - twitch-room:8080
+        labels:
+          env: dev

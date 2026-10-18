@@ -42,6 +42,16 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
     docker-compose up --build
     ```
 
+    To label the build in `/metrics` (and on the Grafana dashboard), pass the
+    version through:
+
+    ```bash
+    APP_VERSION="$(git describe --tags --always --dirty)" docker-compose up --build
+    ```
+
+    The stack also starts Prometheus on <http://localhost:9090>, scraping the
+    service's `/metrics` (see [Scraping and alerting](#scraping-and-alerting)).
+
 3.  **Secrets Management in Production:**
     *   **Database Credentials (`DATABASE_DSN`):** Use a dedicated secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault) and inject the credentials into the `postgres` service environment variables at runtime, rather than relying solely on `.env`.
     *   **OAuth Secrets:** The `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, etc., must be injected via environment variables or a dedicated secrets store when running the container.
@@ -69,6 +79,7 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `ALLOWED_ORIGINS` | Comma-separated list of CORS origins | (empty) | No | |
 | `APP_ENV` | `production` or empty | (empty) | No | |
 | `LOG_LEVEL` | Logging verbosity | `info` | No | |
+| `APP_VERSION` | Build version reported by `/metrics` | `dev` | No | Interpolated by Docker Compose into the image build (`-ldflags "-X main.version=..."`). |
 
 ## Authentication
 
@@ -92,6 +103,8 @@ Each publisher controls two settings via `PUT /v1/settings`:
 | `visibility` | `public` \| `subscribers` \| `private` | `public` is visible to any authenticated user, `subscribers` only to accepted subscribers, `private` to no one. |
 
 Defaults are `open` + `subscribers`. The `/v1/feed` endpoint returns watch state only from publishers the viewer has an **active** subscription to.
+
+Changes to the settings are rate-limited per user (10 writes per minute, counted as `settings_per_user` in the metrics); reads are never throttled, so the UI can still show the current settings. Exceeding the limit returns `429`.
 
 ## Twitch OAuth Setup
 
@@ -164,10 +177,24 @@ Every publisher gets a read-only, unauthenticated page at `/u/{user_id}` — no 
 `GET /metrics` serves a dependency-free Prometheus text-format exposition (`text/plain; version=0.0.4`) for scrapers. When a static `TWITCH_ROOM_AUTH_TOKEN` is configured, scrapers must present it as `Authorization: Bearer <token>` (401 otherwise); with no token configured the endpoint is public, like `/health`. Families exposed:
 
 - `twitch_room_http_requests_total{method,code,route}` and `twitch_room_http_request_duration_seconds{route}` (histogram) — request counts, status codes and durations. Route labels are collapsed to the first path segment (`v1/watch`, `v1/users`, …) so the label space stays small.
-- `twitch_room_throttled_requests_total{reason}` — requests rejected by a rate limiter (`auth_ip`, `watch_per_user`, `feed_per_user`, `share_ip`).
+- `twitch_room_throttled_requests_total{reason}` — requests rejected by a rate limiter (`auth_ip`, `watch_per_user`, `feed_per_user`, `share_ip`, `settings_per_user`).
 - `twitch_room_active_watch_states` — publishers whose watch state has not expired.
 - `twitch_room_subscriptions{status}` — subscriptions tallied per status (`active`, `pending`).
-- `twitch_room_app_info{version}` — build info gauge.
+- `twitch_room_app_info{version}` — build info gauge, where `version` comes from the build (`APP_VERSION`, see [Configuration](#configuration-docker-compose)) and defaults to `dev`.
+
+### Scraping and alerting
+
+Ready-made configuration ships in `deploy/`:
+
+- `deploy/prometheus/` — the scrape config (15s, bearer token), the alert rules, and a two-file image that bakes them in and injects `TWITCH_ROOM_AUTH_TOKEN` at startup.
+- `deploy/prometheus/twitch_room_alerts.yml` — alerts for a down target, missing series, >5% 5xx, >1s p95 latency and rate-limit spikes.
+- `deploy/grafana/twitch-room-dashboard.json` — an importable Grafana dashboard (request rate and status codes by route, latency percentiles, throttling by reason, subscriptions by status, active watch states and the build version).
+
+`docker-compose.yml` builds that image and runs Prometheus on <http://localhost:9090> alongside the service. The scrape credential comes from the same `TWITCH_ROOM_AUTH_TOKEN` the service reads, so dev and production cannot drift apart; when the variable is empty (public `/metrics`) the generated config simply omits the credential. Because the config lives in the image rather than a bind mount, the stack also works where Docker Desktop does not share the host filesystem — edit `deploy/prometheus/prometheus.yml` and re-run `docker compose up --build` to apply changes.
+
+Set `APP_VERSION` so `twitch_room_app_info` identifies the deployed build (the dashboard shows it).
+
+`go test ./...` includes a check that the scrape config, alert rules and dashboard only reference metric families the service actually exposes, that every exposed family appears in the dashboard, and that the credential block the render script strips still matches `prometheus.yml`.
 
 ## Notes
 

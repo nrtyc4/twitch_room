@@ -1,0 +1,56 @@
+# Alerting rules for twitch-room. Loaded by deploy/prometheus/prometheus.yml.
+#
+# Validate with: promtool check rules twitch_room_alerts.yml
+groups:
+  - name: twitch-room
+    rules:
+      - alert: TwitchRoomDown
+        expr: up{job="twitch-room"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "twitch-room is not being scraped"
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for 2 minutes."
+
+      - alert: TwitchRoomMetricsAbsent
+        expr: absent(twitch_room_active_watch_states)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "twitch-room metrics are missing"
+          description: "The twitch_room_* series have disappeared while the target is up; check that /metrics is still authorized (TWITCH_ROOM_AUTH_TOKEN)."
+
+      - alert: TwitchRoomHighErrorRate
+        expr: |
+          sum(rate(twitch_room_http_requests_total{code=~"5.."}[5m]))
+            / clamp_min(sum(rate(twitch_room_http_requests_total[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "twitch-room 5xx rate above 5%"
+          description: "More than 5% of requests have returned a 5xx for 10 minutes (currently {{ $value | humanizePercentage }})."
+
+      - alert: TwitchRoomHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(twitch_room_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "twitch-room p95 latency above 1s"
+          description: "The 95th percentile request duration has been above 1 second for 10 minutes (currently {{ $value }}s)."
+
+      - alert: TwitchRoomThrottlingSpike
+        expr: sum by (reason) (rate(twitch_room_throttled_requests_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "twitch-room is rejecting requests ({{ $labels.reason }})"
+          description: "The {{ $labels.reason }} limiter has rejected more than 5 requests/second for 10 minutes; clients may be misbehaving or a limit is too tight."

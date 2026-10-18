@@ -3,3 +3,8 @@ services:
     environment:
       ALLOW_DEV_AUTH: "false"
       TWITCH_ROOM_AUTH_TOKEN: "prod-secret-token"
+
+  prometheus:
+    environment:
+      # Must match the service token above, or scrapes get 401.
+      TWITCH_ROOM_AUTH_TOKEN: "prod-secret-token"

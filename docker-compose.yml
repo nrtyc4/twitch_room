@@ -43,5 +43,23 @@ services:
       retries: 5
       start_period: 10s
 
+  prometheus:
+    build:
+      context: ./deploy/prometheus
+      dockerfile: Dockerfile
+    image: twitch-room-prometheus:local
+    container_name: twitch-room-prometheus
+    ports:
+      - "9090:9090"
+    environment:
+      # Same variable the service reads, so the scrape credential cannot drift
+      # from the service's own token. Empty means /metrics is public.
+      TWITCH_ROOM_AUTH_TOKEN: "dev-secret-token"
+    volumes:
+      - promdata:/prometheus
+    depends_on:
+      - twitch-room
+
 volumes:
   pgdata:
+  promdata:
