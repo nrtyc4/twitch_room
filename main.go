@@ -96,6 +96,37 @@ func (o *oauthStateStore) Verify(state string) bool {
 	return time.Now().Before(expires)
 }
 
+// newRouter builds the service's route table. It is kept separate from main so
+// the registered routes can be asserted in tests: the handlers below are
+// exercised directly elsewhere, but nothing else guards against a route being
+// dropped from this table (see TestRouterRegistersDocumentedRoutes).
+func newRouter(s *server) (*http.ServeMux, error) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	mux.HandleFunc("/v1/users/", s.handleUserWatch)
+	mux.HandleFunc("/v1/feed", s.handleFeed)
+	mux.HandleFunc("/v1/settings", s.handleSettings)
+	mux.HandleFunc("/v1/subscriptions", s.handleSubscriptions)
+	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
+	mux.HandleFunc("/v1/subscription_requests", s.handleSubscriptionRequests)
+	mux.HandleFunc("/v1/subscription_requests/", s.handleSubscriptionRequestAction)
+	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
+	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
+	mux.HandleFunc("/auth/me", s.handleMe)
+	mux.HandleFunc("/auth/logout", s.handleLogout)
+	mux.HandleFunc("/u/", s.handleSharePage)
+
+	webHandler, err := newWebHandler()
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/", webHandler)
+
+	return mux, nil
+}
+
 func main() {
 	var suggestor followedSuggestor
 	fmt.Println("Initializing twitch-room service")
@@ -243,29 +274,11 @@ func main() {
 		s.sessions.enableSecureCookies()
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/metrics", s.handleMetrics)
-	mux.HandleFunc("/v1/watch", s.handleWatch)
-	mux.HandleFunc("/v1/users/", s.handleUserWatch)
-	mux.HandleFunc("/v1/feed", s.handleFeed)
-	mux.HandleFunc("/v1/settings", s.handleSettings)
-	mux.HandleFunc("/v1/subscriptions", s.handleSubscriptions)
-	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
-	mux.HandleFunc("/v1/subscription_requests", s.handleSubscriptionRequests)
-	mux.HandleFunc("/v1/subscription_requests/", s.handleSubscriptionRequestAction)
-	mux.HandleFunc("/auth/twitch", s.handleTwitchLogin)
-	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
-	mux.HandleFunc("/auth/me", s.handleMe)
-	mux.HandleFunc("/auth/logout", s.handleLogout)
-	mux.HandleFunc("/u/", s.handleSharePage)
-
-	webHandler, err := newWebHandler()
+	mux, err := newRouter(s)
 	if err != nil {
 		slog.Error("failed to init web handler", "error", err)
 		os.Exit(1)
 	}
-	mux.Handle("/", webHandler)
 
 	slog.Info("twitch-room service starting", "port", cfg.Port)
 

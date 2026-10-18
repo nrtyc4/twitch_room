@@ -213,10 +213,61 @@ func newShareServer() (*server, *httptest.Server) {
 		Visibility:       service.VisibilityPublic,
 	})
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/u/", s.handleSharePage)
+	// Build the real route table so the share page is reached the same way it
+	// is in production (a dropped route then fails these tests too).
+	mux, err := newRouter(s)
+	if err != nil {
+		panic(err)
+	}
 	testServer := httptest.NewServer(mux)
 	return s, testServer
+}
+
+// TestRouterRegistersDocumentedRoutes asserts every documented endpoint is
+// present on the real route table. The handler tests build their own mux, so
+// without this a route can be dropped from newRouter while every handler test
+// keeps passing — which is how /u/{user_id} silently disappeared.
+func TestRouterRegistersDocumentedRoutes(t *testing.T) {
+	s, _ := newShareServer()
+
+	mux, err := newRouter(s)
+	if err != nil {
+		t.Fatalf("newRouter: %v", err)
+	}
+
+	routes := []struct {
+		method  string
+		path    string
+		pattern string
+	}{
+		{http.MethodGet, "/health", "/health"},
+		{http.MethodGet, "/metrics", "/metrics"},
+		{http.MethodPost, "/v1/watch", "/v1/watch"},
+		{http.MethodDelete, "/v1/watch", "/v1/watch"},
+		{http.MethodGet, "/v1/users/shroud/watch", "/v1/users/"},
+		{http.MethodGet, "/v1/feed", "/v1/feed"},
+		{http.MethodGet, "/v1/settings", "/v1/settings"},
+		{http.MethodPut, "/v1/settings", "/v1/settings"},
+		{http.MethodGet, "/v1/subscriptions", "/v1/subscriptions"},
+		{http.MethodPost, "/v1/subscriptions/shroud", "/v1/subscriptions/"},
+		{http.MethodDelete, "/v1/subscriptions/shroud", "/v1/subscriptions/"},
+		{http.MethodGet, "/v1/subscription_requests", "/v1/subscription_requests"},
+		{http.MethodPost, "/v1/subscription_requests/shroud/approve", "/v1/subscription_requests/"},
+		{http.MethodPost, "/v1/subscription_requests/shroud/reject", "/v1/subscription_requests/"},
+		{http.MethodGet, "/auth/twitch", "/auth/twitch"},
+		{http.MethodGet, "/auth/twitch/callback", "/auth/twitch/callback"},
+		{http.MethodGet, "/auth/me", "/auth/me"},
+		{http.MethodPost, "/auth/logout", "/auth/logout"},
+		{http.MethodGet, "/u/shroud", "/u/"},
+		{http.MethodGet, "/", "/"},
+	}
+
+	for _, tc := range routes {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if _, pattern := mux.Handler(req); pattern != tc.pattern {
+			t.Errorf("%s %s: matched pattern %q, want %q", tc.method, tc.path, pattern, tc.pattern)
+		}
+	}
 }
 
 func TestSharePageRendersPublicState(t *testing.T) {
