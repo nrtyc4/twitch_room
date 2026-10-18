@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -276,7 +276,7 @@ func (p *TwitchProvider) ResolveIdentity(ctx context.Context, r *http.Request) (
 			}
 			userID, err := p.getUserIDFromToken(ctx, token)
 			if err != nil {
-				log.Printf("WARNING: failed to get user info from token: %v", err)
+				slog.Warn("failed to get user info from token", "error", err)
 				return "", "", err
 			}
 			return userID, token, nil
@@ -301,7 +301,7 @@ func (p *TwitchProvider) ResolveUserID(ctx context.Context, r *http.Request) (st
 					return userID, nil
 				}
 				// Log error but continue to fallback
-				fmt.Printf("WARNING: failed to get user info from token: %v\n", err)
+				slog.Warn("failed to get user info from token", "error", err)
 			}
 		}
 	}

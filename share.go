@@ -4,7 +4,7 @@ import (
 	"embed"
 	"errors"
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -58,7 +58,7 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	state, err := s.watchService.GetPublicWatchState(userID)
 	if err != nil {
 		if !errors.Is(err, service.ErrUserNotFound) {
-			log.Printf("share page for %s: %v", userID, err)
+			slog.Error("share page issue", "user_id", userID, "error", err)
 		}
 		http.NotFound(w, r)
 		return
@@ -102,6 +102,6 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if err := sharePageTmpl.Execute(w, data); err != nil {
-		log.Printf("failed to render share page: %v", err)
+		slog.Error("failed to render share page", "error", err)
 	}
 }
