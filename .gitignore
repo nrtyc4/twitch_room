@@ -6,6 +6,8 @@ bin/
 # Environment files
 .env
 .env.*
+# .env.example is the documented template and is tracked.
+!.env.example
 
 # Logs and temporary files
 *.log
