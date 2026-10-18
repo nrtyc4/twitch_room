@@ -20,12 +20,28 @@ func SecurityHeaders(enableHSTS bool, allowedOrigins []string) func(http.Handler
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("Cross-Origin-Opener-Policy", "same-origin")
 
-			csp := "default-src 'self'; img-src 'self' https://static-cdn.jtvnw.net; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-			if len(allowedOrigins) > 0 {
-				// Append allowed origins to connect-src to allow extension communication
-				csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+strings.Join(allowedOrigins, " "), 1)
+			directives := []string{
+				"default-src 'self'",
+				"img-src 'self' https://static-cdn.jtvnw.net",
+				"style-src 'self'",
+				"script-src 'self'",
+				"connect-src 'self'",
+				"frame-ancestors 'none'",
+				"base-uri 'self'",
+				"form-action 'self'",
 			}
-			h.Set("Content-Security-Policy", csp)
+
+			if len(allowedOrigins) > 0 {
+				// Modify connect-src to allow extension communication
+				for i, d := range directives {
+					if d == "connect-src 'self'" {
+						directives[i] = "connect-src 'self' " + strings.Join(allowedOrigins, " ")
+						break
+					}
+				}
+			}
+
+			h.Set("Content-Security-Policy", strings.Join(directives, "; "))
 
 			if enableHSTS {
 				h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
