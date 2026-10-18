@@ -258,7 +258,7 @@ func main() {
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 	mux.HandleFunc("/auth/me", s.handleMe)
 	mux.HandleFunc("/auth/logout", s.handleLogout)
-	// The share page (/u/{user_id}) is no longer served as part of the headless API.
+	mux.HandleFunc("/u/", s.handleSharePage)
 
 	webHandler, err := newWebHandler()
 	if err != nil {
