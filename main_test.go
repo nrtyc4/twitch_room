@@ -440,6 +440,97 @@ func TestMetricsPublicWhenNoTokenConfigured(t *testing.T) {
 	}
 }
 
+// TestMetricsAppInfoReportsBuildVersion covers the build-time version reported
+// by twitch_room_app_info: docker-compose passes APP_VERSION through the
+// Dockerfile as -ldflags "-X main.version=...".
+func TestMetricsAppInfoReportsBuildVersion(t *testing.T) {
+	defer func(previous string) { version = previous }(version)
+	version = "1.2.3-test"
+
+	_, ts := newMetricsServer(&auth.Middleware{AllowDevAuth: true})
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body := new(bytes.Buffer)
+	_, _ = body.ReadFrom(resp.Body)
+	if want := `twitch_room_app_info{version="1.2.3-test"} 1`; !strings.Contains(body.String(), want) {
+		t.Errorf("metrics body missing %q", want)
+	}
+}
+
+// TestSettingsWritesRateLimitedPerUser covers the dedicated settings limiter:
+// mutations are throttled per user, reads are not.
+func TestSettingsWritesRateLimitedPerUser(t *testing.T) {
+	svc := service.NewServiceWithEnricher(
+		service.NewMemoryRepository(),
+		time.Minute,
+		&fakeShareEnricher{},
+	)
+	s := &server{
+		watchService:    svc,
+		authMiddleware:  &auth.Middleware{AllowDevAuth: true},
+		settingsLimiter: security.NewRateLimiter(2, time.Minute),
+		metrics:         metrics.New(),
+	}
+
+	mux, err := newRouter(s)
+	if err != nil {
+		t.Fatalf("newRouter: %v", err)
+	}
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	save := func() int {
+		req, err := http.NewRequest(http.MethodPut, ts.URL+"/v1/settings",
+			strings.NewReader(`{"subscription_mode":"open","visibility":"public"}`))
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		req.Header.Set(auth.HeaderUserID, "publisher")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	for i := 1; i <= 2; i++ {
+		if got := save(); got != http.StatusOK {
+			t.Fatalf("write %d: expected 200, got %d", i, got)
+		}
+	}
+	if got := save(); got != http.StatusTooManyRequests {
+		t.Fatalf("write over the limit: expected 429, got %d", got)
+	}
+
+	// Reads share the endpoint but not the limiter, so the UI can still show
+	// the current settings after the write budget is spent.
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/settings", nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	req.Header.Set(auth.HeaderUserID, "publisher")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET after the write budget was spent: expected 200, got %d", resp.StatusCode)
+	}
+
+	out := string(s.metrics.Prometheus())
+	if want := `twitch_room_throttled_requests_total{reason="settings_per_user"} 1`; !strings.Contains(out, want) {
+		t.Errorf("metrics missing %q", want)
+	}
+}
+
 func TestMetricsCountsThrottledRequests(t *testing.T) {
 	s := &server{metrics: metrics.New()}
 	s.incThrottled("auth_ip")

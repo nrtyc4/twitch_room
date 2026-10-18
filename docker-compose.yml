@@ -20,6 +20,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Reported as twitch_room_app_info{version=...} by /metrics.
+        # Override with APP_VERSION in .env (e.g. APP_VERSION=$(git describe --tags --always)).
+        VERSION: ${APP_VERSION:-dev}
     container_name: twitch-room
     ports:
       - "8080:8080"

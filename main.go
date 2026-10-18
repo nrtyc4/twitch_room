@@ -32,6 +32,11 @@ import (
 	"twitch_room/internal/validate"
 )
 
+// version is the build version reported by /metrics as
+// twitch_room_app_info{version=...}. It is overridden at build time with
+// -ldflags "-X main.version=..."; a plain `go build` reports "dev".
+var version = "dev"
+
 type watchRequest struct {
 	StreamIDs []string `json:"stream_ids"`
 }
@@ -49,6 +54,7 @@ type server struct {
 	redirectAfterLogin string
 	trustedProxyCIDRs  []netip.Prefix
 	shareLimiter       *security.RateLimiter
+	settingsLimiter    *security.RateLimiter
 	metrics            *metrics.Registry
 }
 
@@ -262,6 +268,7 @@ func main() {
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		authLimiter:        security.NewRateLimiter(20, time.Minute),
 		shareLimiter:       security.NewRateLimiter(60, time.Minute),
+		settingsLimiter:    security.NewRateLimiter(10, time.Minute),
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
 		sessions:           sessions,
@@ -579,6 +586,15 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPut && r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	// Only mutations are throttled: reading settings is cheap and the UI
+	// refreshes it when the Settings tab is opened, while a write changes
+	// subscription/visibility state for everyone following this publisher.
+	if s.settingsLimiter != nil && !s.settingsLimiter.Allow(userID) {
+		s.incThrottled("settings_per_user")
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 
@@ -949,7 +965,7 @@ func (s *server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	for status, count := range snap.SubscriptionsByStatus {
 		s.metrics.GaugeSet("twitch_room_subscriptions", "Subscriptions by status.", float64(count), metrics.LabelSet{"status": string(status)})
 	}
-	s.metrics.GaugeSet("twitch_room_app_info", "Build information.", 1, metrics.LabelSet{"version": "dev"})
+	s.metrics.GaugeSet("twitch_room_app_info", "Build information.", 1, metrics.LabelSet{"version": version})
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
