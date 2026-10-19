@@ -15,4 +15,11 @@ server.log
 current_changes.diff
 test_request.py
 verify_all.py
+
+# Dependencies and test results
+node_modules/
+e2e/node_modules/
+e2e/test-results/
+
+# Project specific
 goProjects/
