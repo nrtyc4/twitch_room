@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<meta http-equiv="refresh" content="120">
+<meta http-equiv="refresh" content="300">
 <title>{{.DisplayName}} is watching</title>
 <style>
   :root {
@@ -69,14 +69,54 @@
   .title { color: var(--muted); margin-top: .2rem; }
   .game { color: var(--accent); font-size: .85rem; margin-top: .15rem; }
   .empty { color: var(--muted); margin-top: 1.25rem; }
-  footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85rem; }
+  footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .8rem; }
   footer a { color: var(--muted); }
+
+  /* Responsive */
+  @media (max-width: 480px) {
+    .stream { flex-direction: column; }
+    .thumb, .placeholder { width: 100%; }
+    header { flex-direction: column; align-items: flex-start; }
+  }
+
+  /* Light theme */
+  body.light {
+    --bg: #f7f7f8;
+    --card: #ffffff;
+    --text: #0e0e10;
+    --muted: #5a5a66;
+    --accent: #9146ff;
+    --live: #eb0400;
+    --off: #d8d8de;
+  }
+  body.light header { border-bottom-color: #e2e2e8; }
+
+  .theme-toggle, .refresh-btn {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--muted);
+    border-radius: 6px;
+    padding: .35rem .7rem;
+    cursor: pointer;
+    font-size: .8rem;
+  }
+  .controls { display: flex; gap: .5rem; align-items: center; }
+  .watch-link { display: inline-block; margin-top: .5rem; color: var(--accent); text-decoration: none; font-size: .85rem; }
+  .watch-link:hover { text-decoration: underline; }
+
+  .stream { transition: transform .15s, box-shadow .15s; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+  .stream:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.3); }
+  header a, .controls button { transition: opacity .2s; }
+  header a:hover, .controls button:hover { opacity: .8; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Twitch Room</h1>
-  <a href="/">&larr; open the app</a>
+  <h1>Watch Room</h1>
+  <div class="controls">
+    <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
+    <button id="theme-btn" class="theme-toggle" type="button">Theme</button>
+  </div>
 </header>
 <main>
   <h2><span class="user-name">{{.DisplayName}}</span> is watching</h2>
@@ -98,6 +138,7 @@
         </div>
         {{if .Title}}<div class="title">{{.Title}}</div>{{end}}
         {{if .GameName}}<div class="game">{{.GameName}}</div>{{end}}
+        <a class="watch-link" href="{{.TwitchURL}}" rel="noopener" target="_blank">Watch on Twitch &rarr;</a>
       </div>
     </div>
     {{end}}
@@ -106,5 +147,30 @@
   <div class="empty">Not watching anything right now.</div>
   {{end}}
 </main>
+<footer>Watch Room · not affiliated with or endorsed by Twitch</footer>
+<script>
+  // Theme toggle
+  (function() {
+    const saved = localStorage.getItem('wr-theme');
+    if (saved === 'light') document.body.classList.add('light');
+    document.getElementById('theme-btn').addEventListener('click', () => {
+      document.body.classList.toggle('light');
+      localStorage.setItem('wr-theme', document.body.classList.contains('light') ? 'light' : 'dark');
+    });
+  })();
+  // Client-side refresh
+  document.getElementById('refresh-btn').addEventListener('click', async () => {
+    try {
+      const res = await fetch(location.href, { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status);
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const newMain = doc.querySelector('main');
+      if (newMain) document.querySelector('main').replaceWith(newMain);
+    } catch (e) {
+      console.error('Refresh failed', e);
+    }
+  });
+</script>
 </body>
 </html>

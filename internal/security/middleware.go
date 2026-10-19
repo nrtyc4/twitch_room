@@ -20,11 +20,20 @@ func SecurityHeaders(enableHSTS bool, allowedOrigins []string) func(http.Handler
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("Cross-Origin-Opener-Policy", "same-origin")
 
+			styleSrc := "style-src 'self'"
+			scriptSrc := "script-src 'self'"
+			// The public share page is a self-contained document that uses
+			// inline styles and a small inline script; allow them there only.
+			if strings.HasPrefix(r.URL.Path, "/u/") {
+				styleSrc = "style-src 'self' 'unsafe-inline'"
+				scriptSrc = "script-src 'self' 'unsafe-inline'"
+			}
+
 			directives := []string{
 				"default-src 'self'",
-				"img-src 'self' https://static-cdn.jtvnw.net",
-				"style-src 'self'",
-				"script-src 'self'",
+				"img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv",
+				styleSrc,
+				scriptSrc,
 				"connect-src 'self'",
 				"frame-ancestors 'none'",
 				"base-uri 'self'",
