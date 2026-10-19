@@ -93,7 +93,7 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 		StreamCount int
 	}{
 		UserID:      userID,
-		DisplayName: s.watchService.ResolveDisplayName(userID),
+		DisplayName: s.watchService.ResolveDisplayNameContext(r.Context(), userID),
 		UpdatedAt:   state.UpdatedAt.In(time.Local).Format(time.RFC1123),
 		Streams:     entries,
 		StreamCount: len(entries),
@@ -101,6 +101,9 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The share page is a self-contained document with inline styles and a
+	// small script; allow them for this route only.
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv data:; connect-src 'self'")
 	if err := sharePageTmpl.Execute(w, data); err != nil {
 		slog.Error("failed to render share page", "error", err)
 	}

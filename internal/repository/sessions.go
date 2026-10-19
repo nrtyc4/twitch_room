@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"log/slog"
 	"time"
 )
 
@@ -65,7 +66,9 @@ func (ps *PostgresStore) DeleteSession(token string) {
 	if token == "" {
 		return
 	}
-	ps.db.Exec(`DELETE FROM sessions WHERE token = $1`, token)
+	if _, err := ps.db.Exec(`DELETE FROM sessions WHERE token = $1`, token); err != nil {
+		slog.Warn("failed to delete session", "error", err)
+	}
 }
 
 // reapExpiredSessions removes expired session rows at most once a minute.
@@ -78,5 +81,7 @@ func (ps *PostgresStore) reapExpiredSessions() {
 		return
 	}
 	ps.lastSessionCleanup = now
-	ps.db.Exec(`DELETE FROM sessions WHERE expires_at <= now()`)
+	if _, err := ps.db.Exec(`DELETE FROM sessions WHERE expires_at <= now()`); err != nil {
+		slog.Warn("failed to reap expired sessions", "error", err)
+	}
 }

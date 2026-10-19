@@ -85,6 +85,18 @@ func (r *MemoryRepository) DeleteUserWatchState(userID string) {
 	delete(r.items, userID)
 }
 
+func (r *MemoryRepository) DeleteUserData(userID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.items, userID)
+	delete(r.settings, userID)
+	for key, sub := range r.subscriptions {
+		if sub.SubscriberID == userID || sub.PublisherID == userID {
+			delete(r.subscriptions, key)
+		}
+	}
+}
+
 // CountActiveWatchStates returns the number of stored states last updated at
 // or after the given time, mirroring how the service treats non-expired ones.
 func (r *MemoryRepository) CountActiveWatchStates(updatedAfter time.Time) int {

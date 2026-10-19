@@ -136,6 +136,7 @@ type Repository interface {
 	GetUserWatchState(userID string) (UserWatchState, bool)
 	ListActiveUsers(limit int) []UserWatchState
 	DeleteUserWatchState(userID string)
+	DeleteUserData(userID string)
 	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings PublisherSettings) error
@@ -175,6 +176,12 @@ func NewServiceWithEnricher(repo Repository, actionTTL time.Duration, enricher S
 }
 
 func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatchState, error) {
+	return s.SetUserWatchStateContext(context.Background(), userID, streamIDs)
+}
+
+// SetUserWatchStateContext is like SetUserWatchState but accepts a context for
+// cancellation/timeout propagation to the enrichment client.
+func (s *Service) SetUserWatchStateContext(ctx context.Context, userID string, streamIDs []string) (UserWatchState, error) {
 	if err := checkUserID(userID); err != nil {
 		return UserWatchState{}, err
 	}
@@ -193,7 +200,7 @@ func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatc
 	}
 
 	now := time.Now().UTC()
-	streams, err := s.resolveStreams(cleaned, now)
+	streams, err := s.resolveStreams(ctx, cleaned, now)
 	if err != nil {
 		return UserWatchState{}, err
 	}
@@ -210,7 +217,7 @@ func (s *Service) SetUserWatchState(userID string, streamIDs []string) (UserWatc
 // enricher is configured the logins are stored as-is. When the enricher is
 // available, logins that do not resolve to an existing Twitch channel are
 // rejected and lookup failures degrade gracefully to plain logins.
-func (s *Service) resolveStreams(logins []string, now time.Time) ([]Stream, error) {
+func (s *Service) resolveStreams(ctx context.Context, logins []string, now time.Time) ([]Stream, error) {
 	if s.enricher == nil {
 		streams := make([]Stream, 0, len(logins))
 		for _, id := range logins {
@@ -219,7 +226,7 @@ func (s *Service) resolveStreams(logins []string, now time.Time) ([]Stream, erro
 		return streams, nil
 	}
 
-	info, err := s.enricher.LookupStreams(context.Background(), logins)
+	info, err := s.enricher.LookupStreams(ctx, logins)
 	if err != nil {
 		// Twitch is unreachable: publish plain logins rather than failing the user.
 		streams := make([]Stream, 0, len(logins))
@@ -406,8 +413,13 @@ func (s *Service) GetPublicWatchState(publisherID string) (UserWatchState, error
 // ResolveDisplayName resolves a single user ID to its human-readable name via
 // the enricher when available, degrading to the raw ID otherwise.
 func (s *Service) ResolveDisplayName(userID string) string {
+	return s.ResolveDisplayNameContext(context.Background(), userID)
+}
+
+// ResolveDisplayNameContext is like ResolveDisplayName but accepts a context.
+func (s *Service) ResolveDisplayNameContext(ctx context.Context, userID string) string {
 	if resolver, ok := s.enricher.(UserResolver); ok && userID != "" {
-		if names, err := resolver.ResolveUsers(context.Background(), []string{userID}); err == nil {
+		if names, err := resolver.ResolveUsers(ctx, []string{userID}); err == nil {
 			if info, ok := names[strings.ToLower(userID)]; ok && info.DisplayName != "" {
 				return info.DisplayName
 			}
@@ -428,6 +440,11 @@ func (s *Service) MetricsSnapshot() MetricsSnapshot {
 }
 
 func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
+	return s.ListFeedContext(context.Background(), viewerID, limit)
+}
+
+// ListFeedContext is like ListFeed but accepts a context for cancellation.
+func (s *Service) ListFeedContext(ctx context.Context, viewerID string, limit int) []FeedEntry {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -495,7 +512,7 @@ func (s *Service) ListFeed(viewerID string, limit int) []FeedEntry {
 		for _, e := range entries {
 			ids = append(ids, e.UserID)
 		}
-		names, _ := resolver.ResolveUsers(context.Background(), ids)
+		names, _ := resolver.ResolveUsers(ctx, ids)
 		for i := range entries {
 			if info, ok := names[strings.ToLower(entries[i].UserID)]; ok && info.DisplayName != "" {
 				entries[i].DisplayName = info.DisplayName
@@ -517,6 +534,16 @@ func (s *Service) ClearUserWatchState(userID string) error {
 	}
 
 	s.repo.DeleteUserWatchState(userID)
+	return nil
+}
+
+// DeleteUser removes all stored data for a user (watch state, settings,
+// subscriptions). Used for account deletion / logout purge.
+func (s *Service) DeleteUser(userID string) error {
+	if err := checkUserID(userID); err != nil {
+		return err
+	}
+	s.repo.DeleteUserData(userID)
 	return nil
 }
 

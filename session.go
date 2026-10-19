@@ -98,28 +98,43 @@ func (b *memorySessionBackend) accessToken(token string) (string, bool) {
 
 // entry returns the live (non-expired) session entry for a token, destroying
 // expired sessions as side effect.
-func (b *memorySessionBackend) entry(token string) (*sessionEntry, bool) {
+func (b *memorySessionBackend) entry(token string) (sessionEntry, bool) {
 	if token == "" {
-		return nil, false
+		return sessionEntry{}, false
 	}
 
-	b.mu.RLock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	entry, ok := b.tokens[token]
-	b.mu.RUnlock()
 	if !ok {
-		return nil, false
+		return sessionEntry{}, false
 	}
 	if time.Now().After(entry.expiresAt) {
-		b.destroy(token)
-		return nil, false
+		delete(b.tokens, token)
+		return sessionEntry{}, false
 	}
-	return entry, true
+	return *entry, true
 }
 
 func (b *memorySessionBackend) destroy(token string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.tokens, token)
+}
+
+// Cleanup removes expired sessions and returns how many were removed.
+func (b *memorySessionBackend) Cleanup() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	removed := 0
+	for token, entry := range b.tokens {
+		if now.After(entry.expiresAt) {
+			delete(b.tokens, token)
+			removed++
+		}
+	}
+	return removed
 }
 
 // postgresSessionBackend persists sessions in the shared database.
@@ -172,6 +187,14 @@ func (s *sessionStore) accessTokenFromRequest(r *http.Request) (string, bool) {
 
 func (s *sessionStore) destroy(token string) {
 	s.backend.destroy(token)
+}
+
+// Cleanup removes expired sessions from the backing store.
+func (s *sessionStore) Cleanup() int {
+	if c, ok := s.backend.(interface{ Cleanup() int }); ok {
+		return c.Cleanup()
+	}
+	return 0
 }
 
 // userIDFromRequest resolves the caller identity from the session cookie if a

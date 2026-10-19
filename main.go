@@ -85,7 +85,26 @@ func (o *oauthStateStore) Put(state string) {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.reapExpiredLocked(time.Now())
 	o.states[state] = time.Now().Add(o.timeout)
+}
+
+// Cleanup removes expired state entries.
+func (o *oauthStateStore) Cleanup() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.reapExpiredLocked(time.Now())
+}
+
+func (o *oauthStateStore) reapExpiredLocked(now time.Time) int {
+	removed := 0
+	for k, exp := range o.states {
+		if !now.Before(exp) {
+			delete(o.states, k)
+			removed++
+		}
+	}
+	return removed
 }
 
 func (o *oauthStateStore) Verify(state string) bool {
@@ -94,6 +113,7 @@ func (o *oauthStateStore) Verify(state string) bool {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.reapExpiredLocked(time.Now())
 	expires, ok := o.states[state]
 	if !ok {
 		return false
@@ -207,6 +227,19 @@ func main() {
 	if pgStore, ok := store.(*repository.PostgresStore); ok {
 		sessions = newSessionStoreWithBackend(sessionTTL, postgresSessionBackend{store: pgStore})
 	}
+	// Reap expired sessions periodically to bound memory growth.
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sessions.Cleanup()
+			}
+		}
+	}()
 	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
 
 	// Enrich published streams with Twitch metadata when app credentials exist
@@ -217,6 +250,18 @@ func main() {
 		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher)
 		suggestor = enricher
 		slog.Info("Twitch enrichment enabled")
+		go func(c *twitchapi.Client) {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					c.Cleanup()
+				}
+			}
+		}(enricher)
 	}
 
 	// Create identity provider with Twitch OAuth configuration.
@@ -231,6 +276,19 @@ func main() {
 	// Create watch state cache with same TTL as service
 	cacheTTL := time.Duration(cfg.WatchStateTTLMin) * time.Minute
 	watchStateCache := performance.NewWatchStateCache(cacheTTL)
+	// Reap expired cache entries periodically to bound memory growth.
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				watchStateCache.Cleanup()
+			}
+		}
+	}()
 
 	// Keep published stream metadata fresh when enrichment is on: re-resolve
 	// Twitch metadata every WATCH_REFRESH_SECONDS and drop stale cache entries.
@@ -280,6 +338,19 @@ func main() {
 	if cfg.SecureCookies {
 		s.sessions.enableSecureCookies()
 	}
+	// Reap expired OAuth states periodically to bound memory growth.
+	go func(store *oauthStateStore) {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				store.Cleanup()
+			}
+		}
+	}(s.oauthStates)
 
 	mux, err := newRouter(s)
 	if err != nil {
@@ -364,6 +435,9 @@ func main() {
 		if redirector != nil {
 			_ = redirector.Shutdown(shutdownCtx)
 		}
+		if pgStore, ok := store.(*repository.PostgresStore); ok {
+			_ = pgStore.Close()
+		}
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("graceful shutdown failed", "error", err)
 			_ = srv.Close()
@@ -378,7 +452,10 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"version": version,
+	})
 }
 
 // decodeJSON decodes a JSON request body into dst. Bodies that exceed the
@@ -456,7 +533,7 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := s.watchService.SetUserWatchState(userID, payload.StreamIDs)
+	state, err := s.watchService.SetUserWatchStateContext(r.Context(), userID, payload.StreamIDs)
 	if err != nil {
 		slog.Error("failed to set watch state", "user_id", userID, "error", err)
 		if errors.Is(err, service.ErrInvalidStream) {
@@ -550,7 +627,7 @@ func (s *server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	feed := s.watchService.ListFeed(userID, 20)
+	feed := s.watchService.ListFeedContext(r.Context(), userID, 20)
 	writeJSON(w, http.StatusOK, feed)
 }
 
@@ -843,7 +920,7 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if resolver, ok := s.suggestor.(service.UserResolver); ok && s.suggestor != nil {
 		if info, err := resolver.ResolveUsers(r.Context(), []string{userID}); err == nil {
 			if profile, ok := info[strings.ToLower(userID)]; ok && profile.DisplayName != "" {
-				writeJSON(w, http.StatusOK, map[string]interface{}{
+				writeJSON(w, http.StatusOK, map[string]any{
 					"user_id":      userID,
 					"display_name": profile.DisplayName,
 					"avatar_url":   profile.AvatarURL,
@@ -857,7 +934,7 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if s.identityProvider != nil {
 		profile, err := s.identityProvider.ResolveProfile(r.Context(), r)
 		if err == nil && profile.DisplayName != "" {
-			writeJSON(w, http.StatusOK, map[string]interface{}{
+			writeJSON(w, http.StatusOK, map[string]any{
 				"user_id":      userID,
 				"display_name": profile.DisplayName,
 				"avatar_url":   profile.AvatarURL,
@@ -880,6 +957,15 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	if !s.rateLimitByIP(w, r) {
 		return
+	}
+
+	// Purge server-side data for the authenticated user on logout (Twitch
+	// Developer Agreement VI.F: delete data on revocation/un-auth).
+	if userID, ok := s.requireUser(r); ok {
+		if err := s.watchService.DeleteUser(userID); err != nil {
+			slog.Warn("failed to purge user data on logout", "user_id", userID, "error", err)
+		}
+		s.watchStateCache.Invalidate(userID)
 	}
 
 	if s.sessions != nil {
@@ -1056,8 +1142,4 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		slog.Error("failed to encode JSON response", "error", err)
 	}
-}
-
-func init() {
-	fmt.Println("Initializing twitch-room service")
 }

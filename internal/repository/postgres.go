@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -163,7 +164,7 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 	`
 
 	rows, err := ps.db.Query(query, limit)
-	if err != nil || rows.Err() != nil {
+	if err != nil {
 		return []service.UserWatchState{}
 	}
 	defer rows.Close()
@@ -180,6 +181,9 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 		}
 
 		states = append(states, buildWatchState(userID, streamIDsResult, streamsResult, updatedAt))
+	}
+	if err := rows.Err(); err != nil {
+		return states
 	}
 
 	return states
@@ -212,7 +216,22 @@ func buildWatchState(userID string, streamIDsResult pq.StringArray, streamsResul
 // Delete removes a user's watch state.
 func (ps *PostgresStore) Delete(userID string) {
 	query := `DELETE FROM user_watch_state WHERE user_id = $1`
-	ps.db.Exec(query, userID)
+	if _, err := ps.db.Exec(query, userID); err != nil {
+		slog.Warn("failed to delete watch state", "user_id", userID, "error", err)
+	}
+}
+
+// DeleteUserData removes all data associated with a user.
+func (ps *PostgresStore) DeleteUserData(userID string) {
+	if _, err := ps.db.Exec(`DELETE FROM user_watch_state WHERE user_id = $1`, userID); err != nil {
+		slog.Warn("failed to delete watch state", "user_id", userID, "error", err)
+	}
+	if _, err := ps.db.Exec(`DELETE FROM publisher_settings WHERE user_id = $1`, userID); err != nil {
+		slog.Warn("failed to delete publisher settings", "user_id", userID, "error", err)
+	}
+	if _, err := ps.db.Exec(`DELETE FROM subscriptions WHERE subscriber_id = $1 OR publisher_id = $1`, userID); err != nil {
+		slog.Warn("failed to delete subscriptions", "user_id", userID, "error", err)
+	}
 }
 
 // SetPublisherSettings inserts or updates a publisher's settings.
@@ -347,7 +366,9 @@ func (ps *PostgresStore) SetSubscriptionStatus(subscriberID, publisherID string,
 // DeleteSubscription removes a subscription.
 func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) {
 	query := `DELETE FROM subscriptions WHERE subscriber_id = $1 AND publisher_id = $2`
-	ps.db.Exec(query, subscriberID, publisherID)
+	if _, err := ps.db.Exec(query, subscriberID, publisherID); err != nil {
+		slog.Warn("failed to delete subscription", "subscriber_id", subscriberID, "publisher_id", publisherID, "error", err)
+	}
 }
 
 func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) []service.Subscription {
@@ -364,6 +385,9 @@ func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) [
 			continue
 		}
 		subs = append(subs, sub)
+	}
+	if err := rows.Err(); err != nil {
+		return subs
 	}
 	return subs
 }

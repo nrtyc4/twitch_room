@@ -12,6 +12,7 @@ type WatchStateStore interface {
 	Get(userID string) (service.UserWatchState, bool)
 	List(limit int) []service.UserWatchState
 	Delete(userID string)
+	DeleteUserData(userID string)
 	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings service.PublisherSettings) error
@@ -130,6 +131,20 @@ func (s *MemoryStore) Delete(userID string) {
 	delete(s.items, userID)
 }
 
+// DeleteUserData removes all data associated with a user (watch state, settings,
+// and any subscriptions where they participate as subscriber or publisher).
+func (s *MemoryStore) DeleteUserData(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.items, userID)
+	delete(s.settings, userID)
+	for key, sub := range s.subscriptions {
+		if sub.SubscriberID == userID || sub.PublisherID == userID {
+			delete(s.subscriptions, key)
+		}
+	}
+}
+
 // CountActiveWatchStates returns the number of stored states last updated at
 // or after the given time, mirroring how the service treats non-expired ones.
 func (s *MemoryStore) CountActiveWatchStates(updatedAfter time.Time) int {
@@ -244,6 +259,10 @@ func (a *ServiceAdapter) ListActiveUsers(limit int) []service.UserWatchState {
 
 func (a *ServiceAdapter) DeleteUserWatchState(userID string) {
 	a.store.Delete(userID)
+}
+
+func (a *ServiceAdapter) DeleteUserData(userID string) {
+	a.store.DeleteUserData(userID)
 }
 
 func (a *ServiceAdapter) CountActiveWatchStates(updatedAfter time.Time) int {

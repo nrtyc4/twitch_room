@@ -215,9 +215,9 @@ func (c *Client) apiGet(ctx context.Context, path string, params url.Values) ([]
 }
 
 type helixUser struct {
-	ID          string `json:"id"`
-	Login       string `json:"login"`
-	DisplayName string `json:"display_name"`
+	ID           string `json:"id"`
+	Login        string `json:"login"`
+	DisplayName  string `json:"display_name"`
 	ProfileImage string `json:"profile_image_url"`
 }
 
@@ -378,7 +378,12 @@ func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string
 	c.usersMu.Lock()
 	var missing []string
 	for _, id := range unique {
-		if entry, ok := c.userCache[id]; ok && now.Sub(entry.fetchedAt) < userCacheTTL {
+		entry, ok := c.userCache[id]
+		if ok && now.Sub(entry.fetchedAt) >= userCacheTTL {
+			delete(c.userCache, id)
+			ok = false
+		}
+		if ok {
 			if entry.displayName != "" {
 				out[id] = service.UserInfo{
 					DisplayName: entry.displayName,
@@ -424,6 +429,21 @@ func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string
 	}
 
 	return out, nil
+}
+
+// Cleanup removes expired user cache entries.
+func (c *Client) Cleanup() int {
+	c.usersMu.Lock()
+	defer c.usersMu.Unlock()
+	now := time.Now()
+	removed := 0
+	for k, e := range c.userCache {
+		if now.Sub(e.fetchedAt) >= userCacheTTL {
+			delete(c.userCache, k)
+			removed++
+		}
+	}
+	return removed
 }
 
 func dedupeLogins(logins []string) []string {
