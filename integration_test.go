@@ -8,12 +8,12 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"twitch_room/internal/auth"
 	"twitch_room/internal/identity"
+	"twitch_room/internal/metrics"
 	"twitch_room/internal/performance"
 	"twitch_room/internal/repository"
 	"twitch_room/internal/security"
@@ -551,56 +551,119 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	t.Logf("Subscription modes integration test passed")
 }
 
-// TestIntegrationWebUI tests that the embedded SPA and static assets are served.
-func TestIntegrationWebUI(t *testing.T) {
-	webHandler, err := newWebHandler()
-	if err != nil {
-		t.Fatalf("newWebHandler failed: %v", err)
+// TestIntegrationExtensionFlow simulates the browser extension talking to the
+// headless API: publishing a watch state, reading the feed, settings, the
+// public share page and /auth/me, all over the full middleware chain.
+func TestIntegrationExtensionFlow(t *testing.T) {
+	store := repository.NewMemoryStore()
+	repo := repository.NewServiceAdapter(store)
+	svc := service.NewService(repo, 5*time.Minute)
+
+	s := &server{
+		watchService:      svc,
+		authMiddleware:    &auth.Middleware{AllowDevAuth: true},
+		identityProvider:  &stubProvider{resolvedUserID: "ext-user"},
+		rateLimiter:       security.NewRateLimiter(100, time.Minute),
+		authLimiter:       security.NewRateLimiter(100, time.Minute),
+		shareLimiter:      security.NewRateLimiter(100, time.Minute),
+		settingsLimiter:   security.NewRateLimiter(100, time.Minute),
+		watchStateCache:   performance.NewWatchStateCache(5 * time.Minute),
+		oauthStates:       newOAuthStateStore(15 * time.Minute),
+		sessions:          newSessionStore(24 * time.Hour),
+		metrics:           metrics.New(),
+		trustedProxyCIDRs: nil,
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/", webHandler)
+	mux, err := newRouter(s)
+	if err != nil {
+		t.Fatalf("newRouter failed: %v", err)
+	}
 
-	testServer := httptest.NewServer(mux)
+	// Reproduce the production middleware chain (minus TLS).
+	var handler http.Handler = withLogging(mux)
+	handler = security.MaxBodyBytes(1 << 20)(handler)
+	handler = security.SecurityHeaders(false, []string{"chrome-extension://*"})(handler)
+	handler = s.metricsMiddleware(handler)
+
+	testServer := httptest.NewServer(handler)
 	defer testServer.Close()
 
-	// The SPA entry point is served at the root.
-	resp, _ := http.Get(testServer.URL + "/")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for /, got %d", resp.StatusCode)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !strings.Contains(string(body), "Twitch Room") {
-		t.Fatalf("expected the SPA entry point to mention Twitch Room")
-	}
-
-	// Static assets are served under /static/.
-	for _, path := range []string{"/static/app.js", "/static/style.css"} {
-		assetResp, _ := http.Get(testServer.URL + path)
-		if assetResp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200 for %s, got %d", path, assetResp.StatusCode)
+	userID := "ext-user"
+	doReq := func(method, path string, body []byte) *http.Response {
+		var r *http.Request
+		if body != nil {
+			r, _ = http.NewRequest(method, testServer.URL+path, bytes.NewReader(body))
+		} else {
+			r, _ = http.NewRequest(method, testServer.URL+path, nil)
 		}
-		assetResp.Body.Close()
+		r.Header.Set("X-User-ID", userID)
+		r.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatalf("%s %s failed: %v", method, path, err)
+		}
+		return resp
 	}
 
-	// Unknown API paths get a JSON 404, not the SPA.
-	apiResp, _ := http.Get(testServer.URL + "/v1/nonexistent")
-	if apiResp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 for unknown API path, got %d", apiResp.StatusCode)
+	// 1. Publish a watch state (as the extension content script would).
+	wb, _ := json.Marshal(map[string][]string{"stream_ids": {"shroud"}})
+	resp := doReq("POST", "/v1/watch", wb)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("publish watch state: got %d", resp.StatusCode)
 	}
-	apiResp.Body.Close()
+	resp.Body.Close()
 
-	t.Logf("Web UI integration test passed")
+	// 2. Read it back.
+	resp = doReq("GET", "/v1/watch", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("read watch state: got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// 3. Update visibility to public so the share page works.
+	sb, _ := json.Marshal(map[string]string{"subscription_mode": "open", "visibility": "public"})
+	resp = doReq("PUT", "/v1/settings", sb)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update settings: got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// 4. Public share page (unauthenticated) should render.
+	shareResp, _ := http.Get(testServer.URL + "/u/" + userID)
+	if shareResp.StatusCode != http.StatusOK {
+		t.Fatalf("share page: got %d", shareResp.StatusCode)
+	}
+	shareResp.Body.Close()
+
+	// 5. /auth/me reports the user.
+	resp = doReq("GET", "/auth/me", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/auth/me: got %d", resp.StatusCode)
+	}
+	var me map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&me)
+	resp.Body.Close()
+	if me["user_id"] != userID {
+		t.Fatalf("/auth/me user_id: got %v", me["user_id"])
+	}
+
+	// 6. Feed endpoint responds.
+	resp = doReq("GET", "/v1/feed", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("feed: got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	t.Logf("Extension flow integration test passed")
 }
 
 // stubProvider is a minimal identity.Provider for wiring tests.
 type stubProvider struct {
-	resolvedUserID string
-	accessToken    string
-	resolveErr     error
-	authorizeURL   string
-	authorizeErr   error
+	resolvedUserID  string
+	accessToken     string
+	resolveErr      error
+	authorizeURL    string
+	authorizeErr    error
 	resolvedProfile identity.UserProfile
 }
 

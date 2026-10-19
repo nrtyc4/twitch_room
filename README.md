@@ -23,6 +23,7 @@ This is the production-safe approach the service aims to use:
 - Feed visibility is opt-in and not globally public by default.
 - HTTPS in production: the service can serve TLS directly or sit behind a reverse proxy; session cookies are Secure and HttpOnly, and a strict Content-Security-Policy, `nosniff`, frame-denial and HSTS headers are applied.
 - Rate limiting: per-user API limits plus per-IP limits on the OAuth endpoints; all request bodies are capped and the HTTP server enforces read/write timeouts.
+- CORS: cross-origin requests are only allowed for origins listed in `ALLOWED_ORIGINS` (comma-separated, supports `*` wildcards such as `chrome-extension://*` or `moz-extension://*`). When unset, no cross-origin requests are permitted — except in development (dev auth enabled, non-production), where it defaults to `chrome-extension://*,moz-extension://*` so the browser extension works out of the box.
 - `ALLOW_DEV_AUTH` (the `X-User-ID` shortcut) is intended for local development only and refuses to be used with `APP_ENV=production`.
 
 ## Production Deployment (Docker Compose)
@@ -76,7 +77,7 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `COOKIE_SECURE` | Force `Secure` on session cookies | `false` | Behind a TLS proxy | |
 | `TRUSTED_PROXY_CIDRS` | Comma-separated proxy networks | (empty) | Behind a proxy | |
 | `ALLOWED_HOSTS` | Comma-separated list of Host values | (empty) | No | |
-| `ALLOWED_ORIGINS` | Comma-separated list of CORS origins | (empty) | No | |
+| `ALLOWED_ORIGINS` | Comma-separated list of CORS origins (supports `*` wildcards, e.g. `chrome-extension://*,moz-extension://*`) | (empty) | No | Empty disables CORS; in dev (dev auth, non-production) it defaults to the extension origins. |
 | `APP_ENV` | `production` or empty | (empty) | No | |
 | `LOG_LEVEL` | Logging verbosity | `info` | No | |
 | `APP_VERSION` | Build version reported by `/metrics` | `dev` | No | Interpolated by Docker Compose into the image build (`-ldflags "-X main.version=..."`). |
@@ -124,23 +125,18 @@ To use real Twitch authentication (instead of dev auth), create an application i
 The login flow is:
 
 - `GET /auth/twitch` redirects the browser to Twitch's authorization page.
-- After the user authorizes, Twitch redirects back to `/auth/twitch/callback?code=...&state=...`. The service exchanges the code for an access token, resolves the Twitch user, and redirects the browser to `APP_REDIRECT_AFTER_LOGIN?user_id=<login>` (the web UI reads this and remembers it).
+- After the user authorizes, Twitch redirects back to `/auth/twitch/callback?code=...&state=...`. The service exchanges the code for an access token, resolves the Twitch user, and redirects the browser to `APP_REDIRECT_AFTER_LOGIN?user_id=<login>` (clients such as the browser extension read this and remember it).
 - The client then authenticates subsequent API calls with that `user_id` (see Authentication below).
 
 The `state` parameter is stored server-side at the start of the flow and verified on the callback to prevent CSRF.
 
-## Web UI
+## Clients
 
-The service ships a small embedded single-page app (no build step, no external CDNs). Open the service root in a browser (`http://localhost:8080/` when running locally or via Docker):
+The service is a headless API: it no longer ships an embedded web UI. The primary client is the browser extension under `extension/`, which talks to the API directly. Any other client (script, mobile app, etc.) can use the same HTTP API described below.
 
-- **Identity:** the bar at the top accepts a user id directly (dev auth) or you can start the real flow with **Login with Twitch**, which redirects back to `/` with the resolved `user_id` in the query string.
-- **My watch:** publish or clear the streams you are currently viewing (raw channel names or full `twitch.tv` URLs). Streams are resolved against the Twitch API when credentials are configured, so the feed shows live titles, games, thumbnails, and viewer counts.
-- **Feed:** shows watch state from publishers you follow with an active subscription, auto-refreshing. Each published stream renders as a card with its thumbnail, channel name, title, game, and a live badge.
-- **People:** follow/unfollow other users by id.
-- **Requests:** approve or reject pending subscribe requests when you run `approved` mode.
-- **Settings:** choose `open`/`approved` subscription mode and `public`/`subscribers`/`private` visibility.
+The extension authenticates with Twitch via `chrome.identity` (implicit grant). Register the redirect URI `https://<extension-id>.chromiumapp.org/` in the Twitch developer console, and provide the app's client id through the extension settings (or the `TWITCH_CLIENT_ID` constant in `extension/background.js`). Tokens are kept in `chrome.storage.local`.
 
-The UI authenticates with the `X-User-ID` header (dev auth) or automatically via the session cookie issued after a real Twitch login. In real deployments the session cookie path should be preferred over trusting client-supplied user ids.
+The API authenticates with the `X-User-ID` header (dev auth) or automatically via the session cookie issued after a real Twitch login. In real deployments the session cookie path should be preferred over trusting client-supplied user ids.
 
 ## API
 

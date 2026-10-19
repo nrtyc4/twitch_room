@@ -40,7 +40,16 @@
     </section>
 
     <section class="settings-section">
-      <h3 class="settings-title">Configuration</h3>
+      <h3 class="settings-title">Authentication</h3>
+      <button id="login-twitch-btn" class="btn">Login with Twitch</button>
+      <button id="logout-twitch-btn" class="btn btn-secondary" style="display:none;">Logout</button>
+      <div id="auth-status" class="status-message"></div>
+
+      <h3 class="settings-title">Manual Configuration</h3>
+      <div class="form-group">
+        <label for="client-id">Twitch Client ID</label>
+        <input type="text" id="client-id" placeholder="Twitch app client id">
+      </div>
       <div class="form-group">
         <label for="auth-token">Auth Token</label>
         <input type="password" id="auth-token" placeholder="Enter Bearer token">
@@ -50,6 +59,7 @@
         <input type="text" id="user-id" placeholder="Enter your User ID">
       </div>
       <button id="save-settings-btn" class="btn btn-secondary">Save Settings</button>
+      <p class="options-link"><a href="#" id="open-options">Open settings page</a></p>
     </section>
   </div>
   <script src="popup.js"></script>

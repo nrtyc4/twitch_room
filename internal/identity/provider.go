@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"twitch_room/internal/performance"
@@ -50,6 +51,12 @@ type TwitchProvider struct {
 	RedirectURI   string
 	EnableDevAuth bool
 	httpClient    *http.Client
+
+	// appAccessToken caches a client-credentials token used to call Helix
+	// endpoints (such as /users) without a user access token.
+	appAccessToken string
+	appTokenExpiry time.Time
+	appTokenMu     sync.Mutex
 }
 
 type twitchTokenResponse struct {
@@ -124,11 +131,72 @@ func (p *TwitchProvider) httpClientOrDefault() *http.Client {
 	return http.DefaultClient
 }
 
+// getAppAccessToken returns a cached client-credentials access token, refreshing
+// it when it is missing or close to expiry.
+func (p *TwitchProvider) getAppAccessToken(ctx context.Context) (string, error) {
+	p.appTokenMu.Lock()
+	defer p.appTokenMu.Unlock()
+
+	if p.appAccessToken != "" && time.Now().Before(p.appTokenExpiry) {
+		return p.appAccessToken, nil
+	}
+
+	params := url.Values{}
+	params.Set("client_id", p.ClientID)
+	params.Set("client_secret", p.ClientSecret)
+	params.Set("grant_type", "client_credentials")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TwitchAuthURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("failed to create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := p.httpClientOrDefault().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch app access token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read app token response: %w", err)
+	}
+
+	var tokenResp twitchTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", fmt.Errorf("failed to parse app token response: %w", err)
+	}
+	if tokenResp.AccessToken == "" {
+		return "", fmt.Errorf("no access token in app token response")
+	}
+
+	p.appAccessToken = tokenResp.AccessToken
+	expiry := tokenResp.ExpiresIn
+	if expiry <= 0 {
+		expiry = 3600
+	}
+	p.appTokenExpiry = time.Now().Add(time.Duration(expiry-60) * time.Second)
+	return p.appAccessToken, nil
+}
+
 // ResolveProfile fetches the full profile (name, avatar) for the authenticated user.
 func (p *TwitchProvider) ResolveProfile(ctx context.Context, r *http.Request) (UserProfile, error) {
 	userID, err := p.ResolveUserID(ctx, r)
 	if err != nil {
 		return UserProfile{}, err
+	}
+
+	// Dev auth / no credentials: return a local profile so /auth/me still
+	// responds without hitting the Twitch API.
+	if p.ClientID == "" || p.ClientSecret == "" {
+		return UserProfile{ID: userID, DisplayName: userID}, nil
+	}
+
+	appToken, err := p.getAppAccessToken(ctx)
+	if err != nil {
+		slog.Warn("could not obtain app access token for profile resolution", "error", err)
+		return UserProfile{ID: userID, DisplayName: userID}, nil
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, TwitchUserInfoURL, nil)
@@ -137,10 +205,17 @@ func (p *TwitchProvider) ResolveProfile(ctx context.Context, r *http.Request) (U
 	}
 
 	q := req.URL.Query()
-	q.Add("user_id", userID)
+	// Twitch Helix /users accepts "id" (numeric user IDs) and "login" (logins).
+	// "user_id" is not a valid parameter.
+	if isNumeric(userID) {
+		q.Add("id", userID)
+	} else {
+		q.Add("login", userID)
+	}
 	req.URL.RawQuery = q.Encode()
 
 	req.Header.Set("Client-ID", p.ClientID)
+	req.Header.Set("Authorization", "Bearer "+appToken)
 
 	resp, err := p.httpClientOrDefault().Do(req)
 	if err != nil {
@@ -168,11 +243,28 @@ func (p *TwitchProvider) ResolveProfile(ctx context.Context, r *http.Request) (U
 	}
 
 	data := userResp.Data[0]
+	displayName := data.DisplayName
+	if displayName == "" {
+		displayName = data.Login
+	}
 	return UserProfile{
 		ID:          data.ID,
-		DisplayName: data.DisplayName,
+		DisplayName: displayName,
 		AvatarURL:   data.ProfileImage,
 	}, nil
+}
+
+// isNumeric reports whether s consists solely of ASCII digits.
+func isNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) (string, error) {

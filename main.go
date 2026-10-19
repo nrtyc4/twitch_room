@@ -124,11 +124,11 @@ func newRouter(s *server) (*http.ServeMux, error) {
 	mux.HandleFunc("/auth/logout", s.handleLogout)
 	mux.HandleFunc("/u/", s.handleSharePage)
 
-	webHandler, err := newWebHandler()
-	if err != nil {
-		return nil, err
-	}
-	mux.Handle("/", webHandler)
+	// The service is a headless API; there is no embedded web UI. Any path
+	// that does not match a registered route (including "/") gets a 404.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	})
 
 	return mux, nil
 }
@@ -385,7 +385,6 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // global size limit are answered with 413; malformed JSON gets a 400.
 func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		slog.Error("decodeJSON error", "error", err)
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
@@ -398,23 +397,18 @@ func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) boo
 }
 
 func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
-	slog.Debug("handleWatch started", "method", r.Method)
 	userID, ok := s.requireUser(r)
 	if !ok {
-		slog.Debug("handleWatch: requireUser failed")
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
-	slog.Debug("handleWatch: userID", "userID", userID)
 	if !s.rateLimiter.Allow(userID) {
-		slog.Debug("handleWatch: rate limit exceeded", "userID", userID)
 		s.incThrottled("watch_per_user")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 		return
 	}
 
 	if r.Method == http.MethodDelete {
-		slog.Debug("handleWatch: method is DELETE")
 		if err := s.watchService.ClearUserWatchState(userID); err != nil {
 			if errors.Is(err, service.ErrUserNotFound) {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "watch state not found"})
@@ -429,14 +423,11 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodGet {
-		slog.Debug("handleWatch: method is GET")
 		// Try cache first
 		if cached, ok := s.watchStateCache.Get(userID); ok {
-			slog.Debug("handleWatch: cache hit", "userID", userID)
 			writeJSON(w, http.StatusOK, cached)
 			return
 		}
-		slog.Debug("handleWatch: cache miss", "userID", userID)
 
 		// Cache miss - fetch from service
 		state, err := s.watchService.GetUserWatchState(userID)
@@ -456,22 +447,18 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
-		slog.Debug("handleWatch: method not allowed", "method", r.Method)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
-	slog.Debug("handleWatch: entering decodeJSON")
 	var payload watchRequest
 	if !s.decodeJSON(w, r, &payload) {
-		slog.Debug("handleWatch: decodeJSON failed")
 		return
 	}
-	slog.Debug("handleWatch: payload decoded", "payload", payload)
 
 	state, err := s.watchService.SetUserWatchState(userID, payload.StreamIDs)
 	if err != nil {
-		slog.Error("handleWatch: SetUserWatchState error", "error", err)
+		slog.Error("failed to set watch state", "user_id", userID, "error", err)
 		if errors.Is(err, service.ErrInvalidStream) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid stream IDs: expected 1-100 characters of letters, digits, '_' or '-' (up to 50)"})
 			return
@@ -851,10 +838,25 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch full profile if identity provider is available
+	// Resolve a display name + avatar when an enrichment client is available
+	// (it already holds app credentials and caches results).
+	if resolver, ok := s.suggestor.(service.UserResolver); ok && s.suggestor != nil {
+		if info, err := resolver.ResolveUsers(r.Context(), []string{userID}); err == nil {
+			if profile, ok := info[strings.ToLower(userID)]; ok && profile.DisplayName != "" {
+				writeJSON(w, http.StatusOK, map[string]interface{}{
+					"user_id":      userID,
+					"display_name": profile.DisplayName,
+					"avatar_url":   profile.AvatarURL,
+				})
+				return
+			}
+		}
+	}
+
+	// Fall back to the identity provider (real OAuth) when available.
 	if s.identityProvider != nil {
 		profile, err := s.identityProvider.ResolveProfile(r.Context(), r)
-		if err == nil {
+		if err == nil && profile.DisplayName != "" {
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"user_id":      userID,
 				"display_name": profile.DisplayName,
@@ -862,8 +864,9 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// If profile fetch fails, at least return user_id
-		slog.Error("could not fetch profile", "user_id", userID, "error", err)
+		if err != nil {
+			slog.Warn("could not fetch profile", "user_id", userID, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"user_id": userID})
@@ -1013,7 +1016,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 // routeKey collapses a request path into a coarse label so per-user paths do
-// not explode the metrics label space.
+// not explode the metrics label space. The second segment is kept for v1
+// routes (e.g. v1/watch, v1/users); deeper segments (ids, actions) are
+// dropped to keep the label cardinality small.
 func routeKey(path string) string {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {

@@ -3,7 +3,14 @@
  * Handles API communication and manages the current watching state.
  */
 
-const API_BASE = 'http://localhost:8080';
+let API_BASE = 'http://localhost:8080';
+chrome.storage.local.get(['API_BASE'], (r) => {
+  if (r && r.API_BASE) API_BASE = r.API_BASE;
+});
+
+// Twitch application client id. Replace with your own from the Twitch Dev Console,
+// or set it via the extension options page (stored as TWITCH_CLIENT_ID).
+const TWITCH_CLIENT_ID = '';
 
 // State in memory for fast access
 let currentWatchState = {
@@ -69,7 +76,99 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ status: 'error', error: err.message }));
     return true;
   }
+
+  if (message.type === 'LOGIN_TWITCH') {
+    loginWithTwitch()
+      .then(result => sendResponse({ status: 'success', data: result }))
+      .catch(err => sendResponse({ status: 'error', error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'LOGOUT_TWITCH') {
+    chrome.storage.local.remove(['AUTH_TOKEN', 'USER_ID', 'TWITCH_ACCESS_TOKEN'], () => {
+      sendResponse({ status: 'success' });
+    });
+    return true;
+  }
 });
+
+/**
+ * Returns the Twitch client id to use, preferring a value stored in
+ * extension storage over the bundled constant.
+ */
+async function getClientId() {
+  const stored = await chrome.storage.local.get(['TWITCH_CLIENT_ID']);
+  if (stored.TWITCH_CLIENT_ID) return stored.TWITCH_CLIENT_ID;
+  return TWITCH_CLIENT_ID;
+}
+
+/**
+ * Runs the Twitch OAuth (implicit grant) flow via chrome.identity and stores
+ * the resulting access token + user id in extension storage.
+ */
+async function loginWithTwitch() {
+  const clientId = await getClientId();
+  if (!clientId) {
+    throw new Error('Missing Twitch client id. Set it in the extension settings.');
+  }
+
+  const redirectUri = chrome.identity.getRedirectURL();
+  const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'token');
+  authUrl.searchParams.set('scope', 'user:read:follows');
+  authUrl.searchParams.set('force_verify', 'true');
+
+  const responseUrl = await new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow(
+      { url: authUrl.toString(), interactive: true },
+      (redirectedTo) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!redirectedTo) {
+          reject(new Error('OAuth flow was cancelled.'));
+          return;
+        }
+        resolve(redirectedTo);
+      }
+    );
+  });
+
+  // The access token comes back in the URL fragment.
+  const hash = responseUrl.split('#')[1] || '';
+  const params = new URLSearchParams(hash);
+  const accessToken = params.get('access_token');
+  if (!accessToken) {
+    throw new Error('No access token returned by Twitch.');
+  }
+
+  // Resolve the Twitch user id (login) using the token.
+  const userResp = await fetch('https://api.twitch.tv/helix/users', {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Client-ID': clientId,
+    },
+  });
+  if (!userResp.ok) {
+    throw new Error(`Failed to resolve Twitch user: ${userResp.status}`);
+  }
+  const userData = await userResp.json();
+  const login = userData?.data?.[0]?.login;
+  if (!login) {
+    throw new Error('Could not resolve Twitch user login.');
+  }
+
+  await chrome.storage.local.set({
+    AUTH_TOKEN: accessToken,
+    USER_ID: login,
+    TWITCH_ACCESS_TOKEN: accessToken,
+  });
+
+  return { user_id: login, access_token: accessToken };
+}
 
 /**
  * Fetches the social feed from the backend.
@@ -78,7 +177,7 @@ async function fetchFeed() {
   const settings = await chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID']);
   
   if (!settings.AUTH_TOKEN || !settings.USER_ID) {
-    throw new Error('Missing AUTH_TOKEN or USER_ID. Please configure them in settings.');
+    throw new Error('Missing AUTH_TOKEN or USER_ID. Please configure them in settings or log in with Twitch.');
   }
 
   const response = await fetch(`${API_BASE}/v1/feed`, {
@@ -103,7 +202,7 @@ async function getUserInfo() {
   const settings = await chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID']);
   
   if (!settings.AUTH_TOKEN || !settings.USER_ID) {
-    throw new Error('Missing AUTH_TOKEN or USER_ID. Please configure them in settings.');
+    throw new Error('Missing AUTH_TOKEN or USER_ID. Please configure them in settings or log in with Twitch.');
   }
 
   const response = await fetch(`${API_BASE}/auth/me`, {
@@ -134,47 +233,24 @@ async function syncWithBackend(channelName, userId) {
   const settings = await chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID']);
   
   if (!settings.AUTH_TOKEN || !settings.USER_ID) {
-    const errorMsg = 'Missing AUTH_TOKEN or USER_ID. Please configure them in settings.';
+    const errorMsg = 'Missing AUTH_TOKEN or USER_ID. Please configure them in settings or log in with Twitch.';
     console.warn(`[Twitch Room] ${errorMsg}`);
     throw new Error(errorMsg);
   }
 
-  console.log(`[Twitch Room] Syncing with backend: ${channelName} (User: ${settings.USER_ID})`);
+  const response = await fetch(`${API_BASE}/v1/watch`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.AUTH_TOKEN}`,
+      'X-User-ID': settings.USER_ID
+    },
+    body: JSON.stringify({ stream_ids: [channelName] })
+  });
 
-  try {
-    const response = await fetch(`${API_BASE}/v1/watch`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${settings.AUTH_TOKEN}`,
-        'X-User-ID': settings.USER_ID,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        stream_ids: [channelName]
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    console.log('[Twitch Room] Sync successful');
-    return await response.json();
-  } catch (error) {
-    console.error('[Twitch Room] Sync failed:', error);
-    throw error;
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
   }
+
+  return await response.json();
 }
-
-// Periodic syncing (every 5 minutes)
-chrome.alarms.create('syncAlarm', { periodInMinutes: 5 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'syncAlarm') {
-    console.log('[Twitch Room] Running periodic sync...');
-    syncWithBackend(currentWatchState.channelName, currentWatchState.userId).catch(err => {
-      console.error('[Twitch Room] Periodic sync failed:', err.message);
-    });
-  }
-});
-
-console.log('[Twitch Room] Background script initialized');

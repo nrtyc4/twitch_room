@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "alarms",
-    "notifications"
+    "notifications",
+    "identity"
   ],
   "host_permissions": [
     "https://*.twitch.tv/*",
@@ -15,6 +16,7 @@
   "action": {
     "default_popup": "popup/popup.html"
   },
+  "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
   },

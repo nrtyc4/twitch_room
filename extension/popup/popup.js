@@ -8,6 +8,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const syncBtn = document.getElementById('sync-btn');
   const copyLinkBtn = document.getElementById('copy-link-btn');
   const saveSettingsBtn = document.getElementById('save-settings-btn');
+  const openOptionsLink = document.getElementById('open-options');
+  const loginTwitchBtn = document.getElementById('login-twitch-btn');
+  const logoutTwitchBtn = document.getElementById('logout-twitch-btn');
+  const authStatus = document.getElementById('auth-status');
+  const clientIdInput = document.getElementById('client-id');
   const authTokenInput = document.getElementById('auth-token');
   const userIdInput = document.getElementById('user-id');
   const statusMessage = document.getElementById('status-message');
@@ -16,9 +21,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const feedContainer = document.getElementById('feed-container');
 
   // Load current settings from storage
-  chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID'], (result) => {
+  chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID', 'TWITCH_CLIENT_ID'], (result) => {
+    if (result.TWITCH_CLIENT_ID) clientIdInput.value = result.TWITCH_CLIENT_ID;
     if (result.AUTH_TOKEN) authTokenInput.value = result.AUTH_TOKEN;
     if (result.USER_ID) userIdInput.value = result.USER_ID;
+    updateAuthButtons(!!result.AUTH_TOKEN);
     loadUserProfile();
     loadFeed();
   });
@@ -148,22 +155,83 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(updateStatusUI, 5000);
   setInterval(loadFeed, 30000); // Refresh feed every 30 seconds
 
+  function updateAuthButtons(isAuthed) {
+    loginTwitchBtn.style.display = isAuthed ? 'none' : 'inline-block';
+    logoutTwitchBtn.style.display = isAuthed ? 'inline-block' : 'none';
+  }
+
+  // Login with Twitch
+  loginTwitchBtn.addEventListener('click', () => {
+    const clientId = clientIdInput.value.trim();
+    if (clientId) {
+      chrome.storage.local.set({ TWITCH_CLIENT_ID: clientId });
+    }
+    loginTwitchBtn.disabled = true;
+    loginTwitchBtn.textContent = 'Logging in...';
+    chrome.runtime.sendMessage({ type: 'LOGIN_TWITCH' }, (response) => {
+      loginTwitchBtn.disabled = false;
+      loginTwitchBtn.textContent = 'Login with Twitch';
+      if (chrome.runtime.lastError) {
+        authStatus.textContent = chrome.runtime.lastError.message;
+        authStatus.className = 'status-message error';
+        return;
+      }
+      if (response && response.status === 'success') {
+        if (response.data && response.data.user_id) {
+          userIdInput.value = response.data.user_id;
+        }
+        authStatus.textContent = 'Logged in with Twitch.';
+        authStatus.className = 'status-message success';
+        updateAuthButtons(true);
+        loadUserProfile();
+        loadFeed();
+      } else {
+        authStatus.textContent = response ? response.error : 'Login failed.';
+        authStatus.className = 'status-message error';
+      }
+    });
+  });
+
+  // Logout
+  logoutTwitchBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'LOGOUT_TWITCH' }, () => {
+      authTokenInput.value = '';
+      userIdInput.value = '';
+      updateAuthButtons(false);
+      authStatus.textContent = 'Logged out.';
+      authStatus.className = 'status-message success';
+    });
+  });
+
   // Save settings handler
   saveSettingsBtn.addEventListener('click', () => {
     const authToken = authTokenInput.value.trim();
     const userId = userIdInput.value.trim();
+    const clientId = clientIdInput.value.trim();
+
+    if (clientId) {
+      chrome.storage.local.set({ TWITCH_CLIENT_ID: clientId });
+    }
 
     if (!authToken || !userId) {
-      showStatus('Please provide both Auth Token and User ID.', 'error');
+      showStatus('Please provide both Auth Token and User ID (or use Login with Twitch).', 'error');
       return;
     }
 
     chrome.storage.local.set({ AUTH_TOKEN: authToken, USER_ID: userId }, () => {
       showStatus('Settings saved!', 'success');
+      updateAuthButtons(true);
       loadUserProfile();
       loadFeed();
     });
   });
+
+  if (openOptionsLink) {
+    openOptionsLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+    });
+  }
 
   // Sync Now handler
   syncBtn.addEventListener('click', () => {

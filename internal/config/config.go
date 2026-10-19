@@ -24,7 +24,7 @@ type Config struct {
 	// TLSEnabled makes the service serve HTTPS directly from TLSCertFile /
 	// TLSKeyFile. TLSPort, when non-empty, additionally starts a plain-HTTP
 	// redirector on that port that 301s everything to the HTTPS listener.
-	TLSEnabled bool
+	TLSEnabled  bool
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSPort     string
@@ -39,7 +39,10 @@ type Config struct {
 	AllowedHosts []string
 
 	// AllowedOrigins is the whitelist of Cross-Origin Resource Sharing (CORS)
-	// origins allowed to access the API. Empty accepts any origin.
+	// origins allowed to access the API. Empty disables CORS (no cross-origin
+	// requests are allowed), except in development (dev auth enabled, not
+	// production) where it defaults to chrome-extension://* and
+	// moz-extension://*.
 	AllowedOrigins []string
 
 	// TrustedProxyCIDRs lists the networks whose X-Forwarded-For and
@@ -89,6 +92,15 @@ func Load() Config {
 	tlsEnabled := boolEnv("TLS_ENABLED")
 	secureCookies := boolEnv("COOKIE_SECURE")
 
+	allowedOrigins := splitList(os.Getenv("ALLOWED_ORIGINS"))
+	// In development (dev auth enabled, not production) default to allowing
+	// browser-extension origins so the extension can talk to the API without
+	// extra configuration. Production deployments must set ALLOWED_ORIGINS
+	// explicitly.
+	if len(allowedOrigins) == 0 && allowDevAuth && appEnv != "production" {
+		allowedOrigins = []string{"chrome-extension://*", "moz-extension://*"}
+	}
+
 	return Config{
 		Port:                port,
 		AuthToken:           os.Getenv("TWITCH_ROOM_AUTH_TOKEN"),
@@ -104,9 +116,9 @@ func Load() Config {
 		TLSKeyFile:          os.Getenv("TLS_KEY_FILE"),
 		TLSPort:             os.Getenv("TLS_REDIRECT_PORT"),
 		SecureCookies:       secureCookies,
-		AllowedHosts:         splitList(os.Getenv("ALLOWED_HOSTS")),
-		AllowedOrigins:       splitList(os.Getenv("ALLOWED_ORIGINS")),
-		TrustedProxyCIDRs:    parseCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS")),
+		AllowedHosts:        splitList(os.Getenv("ALLOWED_HOSTS")),
+		AllowedOrigins:      allowedOrigins,
+		TrustedProxyCIDRs:   parseCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS")),
 	}
 }
 

@@ -134,3 +134,20 @@ func TestCSP(t *testing.T) {
 		}
 	})
 }
+
+func TestCORSEmptyOriginsDisablesCORS(t *testing.T) {
+	middleware := CORS(nil)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Origin", "https://example.com")
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("expected no CORS header with empty origins, got %q", got)
+	}
+}

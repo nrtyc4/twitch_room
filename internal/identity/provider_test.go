@@ -60,6 +60,23 @@ func TestTwitchProviderFallsBackToDevAuthWhenNoValidBearerToken(t *testing.T) {
 	}
 }
 
+func TestResolveProfileDevAuth(t *testing.T) {
+	provider := &TwitchProvider{EnableDevAuth: true}
+	req := httptest.NewRequest("GET", "/auth/me", nil)
+	req.Header.Set("X-User-ID", "dev-user")
+
+	profile, err := provider.ResolveProfile(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected dev profile to resolve, got error: %v", err)
+	}
+	if profile.ID != "dev-user" {
+		t.Fatalf("expected ID dev-user, got %s", profile.ID)
+	}
+	if profile.DisplayName != "dev-user" {
+		t.Fatalf("expected DisplayName dev-user, got %s", profile.DisplayName)
+	}
+}
+
 func TestTwitchProviderBuildAuthorizeURL(t *testing.T) {
 	provider := &TwitchProvider{
 		ClientID:    "client-id-123",
