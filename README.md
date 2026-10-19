@@ -192,9 +192,27 @@ Set `APP_VERSION` so `twitch_room_app_info` identifies the deployed build (the d
 
 `go test ./...` includes a check that the scrape config, alert rules and dashboard only reference metric families the service actually exposes, that every exposed family appears in the dashboard, and that the credential block the render script strips still matches `prometheus.yml`.
 
+## Twitch Terms of Service compliance
+
+The browser extension no longer scrapes or modifies twitch.tv pages. Watch state is
+entered manually by the user, authentication uses Twitch OAuth, and the extension
+ships with a privacy policy and consent gate. Server-side data is purged on logout.
+See `TWITCH_COMPLIANCE_AUDIT.md` and `extension/privacy.html`.
+
 ## Notes
 
 The service uses PostgreSQL (`DATABASE_DSN`) when configured and falls back to an in-memory repository otherwise. OAuth session tokens are stored in the database too, so sessions survive a restart and work across multiple instances (memory sessions are used when no database is configured). When Twitch credentials are configured, publisher display names in the feed are resolved from the Twitch users API (cached briefly) and fall back to the raw user ID.
+
+## Go best practices & memory efficiency
+
+The codebase follows a few conventions to stay memory-efficient and idiomatic Go:
+
+- **Formatting & tooling:** all Go sources are `gofmt`-clean. CI runs `gofmt -l`, `go vet`, `go test -race`, and the build.
+- **Bounded in-memory state:** rate limiters, the OAuth state store, the Twitch user cache, the watch-state cache and the in-memory session store all evict expired entries. Reaping runs lazily on access and on a periodic (one-minute) background ticker so idle keys cannot accumulate indefinitely.
+- **Concurrency safety:** session expiry is handled under a single write lock (no check-then-act race); rate-limiter slicing reuses backing arrays only within the locked section.
+- **Resource hygiene:** HTTP response bodies are capped with `io.LimitReader` (identity provider and Twitch client); Postgres `Exec`/`Rows.Err()` errors are logged instead of silently dropped; the database connection is closed on graceful shutdown.
+- **Context propagation:** request contexts flow into the Twitch enrichment calls (`SetUserWatchState`, `ListFeed`, `ResolveDisplayName`) instead of `context.Background()`.
+- **Idioms:** `MaxIDLength` is a `const`; `any` is used instead of `interface{}`; startup logging lives in `main()` (no `init()` side effects).
 
 ## Running the tests
 

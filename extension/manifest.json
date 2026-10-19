@@ -1,17 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Twitch Room",
+  "name": "Watch Room",
   "version": "1.0.0",
-  "description": "Share what you are watching on Twitch with your friends.",
+  "description": "Share what you are watching on Twitch with your friends. Not affiliated with or endorsed by Twitch.",
   "permissions": [
     "storage",
-    "alarms",
-    "notifications",
-    "identity"
+    "identity",
+    "activeTab"
   ],
   "host_permissions": [
-    "https://*.twitch.tv/*",
-    "http://localhost:8080/*"
+    "http://localhost:8080/*",
+    "https://localhost:8080/*"
   ],
   "action": {
     "default_popup": "popup/popup.html"
@@ -19,11 +18,5 @@
   "options_page": "options.html",
   "background": {
     "service_worker": "background.js"
-  },
-  "content_scripts": [
-    {
-      "matches": ["https://*.twitch.tv/*"],
-      "js": ["content.js"]
-    }
-  ]
+  }
 }

@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const testBtn = document.getElementById('test-btn');
   const loginBtn = document.getElementById('login-btn');
   const logoutBtn = document.getElementById('logout-btn');
+  const deleteDataBtn = document.getElementById('delete-data-btn');
 
   function showStatus(msg, ok) {
     status.textContent = msg;
@@ -65,6 +66,25 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshAuthStatus();
     });
   });
+
+  if (deleteDataBtn) {
+    deleteDataBtn.addEventListener('click', async () => {
+      const r = await chrome.storage.local.get(['API_BASE', 'AUTH_TOKEN', 'USER_ID']);
+      const apiBase = (r.API_BASE || 'http://localhost:8080').replace(/\/$/, '');
+      try {
+        const resp = await fetch(`${apiBase}/auth/logout`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${r.AUTH_TOKEN || ''}`, 'X-User-ID': r.USER_ID || '' },
+          credentials: 'include',
+        });
+        if (resp.ok) showStatus('Data deleted.', true);
+        else showStatus('Delete failed: ' + resp.status, false);
+      } catch (e) {
+        showStatus('Delete error: ' + e.message, false);
+      }
+      chrome.runtime.sendMessage({ type: 'LOGOUT_TWITCH' }, () => refreshAuthStatus());
+    });
+  }
 
   testBtn.addEventListener('click', async () => {
     const apiBase = apiBaseInput.value.trim() || 'http://localhost:8080';

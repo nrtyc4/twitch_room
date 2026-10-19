@@ -158,7 +158,7 @@ func (p *TwitchProvider) getAppAccessToken(ctx context.Context) (string, error) 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("failed to read app token response: %w", err)
 	}
@@ -228,7 +228,7 @@ func (p *TwitchProvider) ResolveProfile(ctx context.Context, r *http.Request) (U
 		return UserProfile{}, fmt.Errorf("received status %d from Twitch API: %s", resp.StatusCode, string(bodySnippet))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return UserProfile{}, fmt.Errorf("failed to read user info response: %w", err)
 	}
@@ -295,7 +295,7 @@ func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("failed to read token response: %w", err)
 	}
@@ -332,7 +332,7 @@ func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken str
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("failed to read user info response: %w", err)
 	}

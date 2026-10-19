@@ -14,11 +14,11 @@ import (
 var (
 	ErrInvalidUser   = errors.New("invalid user id")
 	ErrInvalidStream = errors.New("invalid stream id")
-
-	// MaxIDLength caps identifiers: user IDs (Twitch logins), publisher IDs
-	// and stream IDs must fit in a short plain-ASCII name.
-	MaxIDLength = 100
 )
+
+// MaxIDLength caps identifiers: user IDs (Twitch logins), publisher IDs
+// and stream IDs must fit in a short plain-ASCII name.
+const MaxIDLength = 100
 
 // UserID reports whether id is acceptable as a user, publisher or subscriber
 // identifier: 1-100 chars of letters, digits, underscore or hyphen.

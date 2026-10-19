@@ -15,13 +15,21 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.26'
 
-      - name: Test
-        run: go test ./...
+      - name: Format check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "gofmt needed:"
+            gofmt -l .
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
+
+      - name: Test (race)
+        run: go test -race ./...
 
       - name: Build with version
         env:

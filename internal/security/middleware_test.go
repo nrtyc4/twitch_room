@@ -272,5 +272,3 @@ func TestHTTPSRequest(t *testing.T) {
 		t.Error("expected a real TLS connection to count regardless of headers")
 	}
 }
-
-

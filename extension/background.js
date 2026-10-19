@@ -19,37 +19,15 @@ let currentWatchState = {
   lastUpdated: null
 };
 
-// Listen for messages from content.js
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'WATCHING_CHANNEL') {
-    const { channelName, userId } = message.payload;
-    console.log('[Twitch Room] Received watch state from content script:', { channelName, userId });
-    
-    currentWatchState = {
-      channelName,
-      userId,
-      lastUpdated: Date.now()
-    };
-
-    // Update the stored "current state"
-    chrome.storage.local.set({ currentWatchState }, () => {
-      console.log('[Twitch Room] Current state updated in storage');
-    });
-
-    // Trigger sync with backend
-    syncWithBackend(channelName, userId).catch(err => {
-      console.error('[Twitch Room] Initial sync failed:', err.message);
-    });
-
-    sendResponse({ status: 'received' });
-  }
-  return true; // Keep channel open for async response
-});
+// NOTE: No content script is used anymore. Watch state is entered manually by the
+// user (see popup) to comply with Twitch's Terms of Service (no automated
+// scraping or DOM modification of twitch.tv).
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'SYNC_NOW') {
-    syncWithBackend(currentWatchState.channelName, currentWatchState.userId)
+    const channelName = (message.payload && message.payload.channelName) || currentWatchState.channelName;
+    syncWithBackend(channelName, currentWatchState.userId)
       .then(() => sendResponse({ status: 'success' }))
       .catch(err => sendResponse({ status: 'error', error: err.message }));
     return true;
@@ -85,9 +63,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'LOGOUT_TWITCH') {
-    chrome.storage.local.remove(['AUTH_TOKEN', 'USER_ID', 'TWITCH_ACCESS_TOKEN'], () => {
-      sendResponse({ status: 'success' });
-    });
+    (async () => {
+      try {
+        const s = await chrome.storage.local.get(['API_BASE', 'AUTH_TOKEN', 'USER_ID']);
+        const apiBase = (s.API_BASE || API_BASE || 'http://localhost:8080').replace(/\/$/, '');
+        if (s.AUTH_TOKEN || s.USER_ID) {
+          await fetch(`${apiBase}/auth/logout`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${s.AUTH_TOKEN || ''}`,
+              'X-User-ID': s.USER_ID || '',
+            },
+            credentials: 'include',
+          }).catch(() => {});
+        }
+      } catch (e) { /* ignore */ }
+      chrome.storage.local.remove(['AUTH_TOKEN', 'USER_ID', 'TWITCH_ACCESS_TOKEN', 'PRIVACY_CONSENT'], () => {
+        sendResponse({ status: 'success' });
+      });
+    })();
     return true;
   }
 });
@@ -117,7 +111,7 @@ async function loginWithTwitch() {
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'token');
-  authUrl.searchParams.set('scope', 'user:read:follows');
+  // Minimal scopes: identity only. No follows/data scopes are used.
   authUrl.searchParams.set('force_verify', 'true');
 
   const responseUrl = await new Promise((resolve, reject) => {
@@ -226,15 +220,20 @@ async function getUserInfo() {
  */
 async function syncWithBackend(channelName, userId) {
   if (!channelName) {
-    console.log('[Twitch Room] No active channel to sync. Skipping.');
+    console.log('[Watch Room] No active channel to sync. Skipping.');
     return { status: 'skipped' };
+  }
+
+  const consent = await chrome.storage.local.get(['PRIVACY_CONSENT']);
+  if (!consent.PRIVACY_CONSENT) {
+    throw new Error('Privacy consent is required before syncing. Please accept the privacy policy in settings.');
   }
 
   const settings = await chrome.storage.local.get(['AUTH_TOKEN', 'USER_ID']);
   
   if (!settings.AUTH_TOKEN || !settings.USER_ID) {
     const errorMsg = 'Missing AUTH_TOKEN or USER_ID. Please configure them in settings or log in with Twitch.';
-    console.warn(`[Twitch Room] ${errorMsg}`);
+    console.warn(`[Watch Room] ${errorMsg}`);
     throw new Error(errorMsg);
   }
 
