@@ -131,8 +131,44 @@ func (ps *PostgresStore) Upsert(userID string, streams []service.Stream, updated
 	return buildWatchState(userIDResult, streamIDsResult, streamsResult, updatedAtResult), nil
 }
 
+// UpsertMany inserts or updates multiple watch states in one transaction.
+func (ps *PostgresStore) UpsertMany(states []service.UserWatchState) error {
+	if len(states) == 0 {
+		return nil
+	}
+	tx, err := ps.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, st := range states {
+		payload, err := json.Marshal(st.Streams)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`
+			INSERT INTO user_watch_state (user_id, stream_ids, streams, updated_at)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (user_id) DO UPDATE SET
+				stream_ids = EXCLUDED.stream_ids,
+				streams = EXCLUDED.streams,
+				updated_at = EXCLUDED.updated_at`,
+			st.UserID, pq.Array(st.StreamIDs), payload, st.UpdatedAt)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Get retrieves a user's watch state by ID.
 func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
+	state, ok, _ := ps.GetWithError(userID)
+	return state, ok
+}
+
+// GetWithError retrieves a user's watch state by ID, reporting DB errors.
+func (ps *PostgresStore) GetWithError(userID string) (service.UserWatchState, bool, error) {
 	query := `SELECT user_id, stream_ids, streams, updated_at FROM user_watch_state WHERE user_id = $1`
 
 	var userIDResult string
@@ -145,13 +181,13 @@ func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return service.UserWatchState{}, false
+			return service.UserWatchState{}, false, nil
 		}
 		slog.Warn("postgres Get failed", "user_id", userID, "error", err)
-		return service.UserWatchState{}, false
+		return service.UserWatchState{}, false, err
 	}
 
-	return buildWatchState(userIDResult, streamIDsResult, streamsResult, updatedAtResult), true
+	return buildWatchState(userIDResult, streamIDsResult, streamsResult, updatedAtResult), true, nil
 }
 
 // List retrieves the most recent user watch states up to the limit.

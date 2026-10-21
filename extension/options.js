@@ -35,9 +35,20 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshAuthStatus();
   });
 
-  saveBtn.addEventListener('click', () => {
+  saveBtn.addEventListener('click', async () => {
     const clientId = clientIdInput.value.trim();
     const apiBase = apiBaseInput.value.trim() || 'http://localhost:8080';
+    let origin;
+    try { origin = new URL(apiBase).origin + '/*'; } catch (e) { origin = null; }
+    if (origin && !/^https?:\/\/localhost(:\d+)?\/\*$/.test(origin)) {
+      const granted = await new Promise((resolve) => {
+        chrome.permissions.request({ origins: [origin] }, (g) => resolve(!!g));
+      });
+      if (!granted) {
+        showStatus('Host permission denied; keeping previous base.', false);
+        return;
+      }
+    }
     chrome.storage.local.set({ TWITCH_CLIENT_ID: clientId, API_BASE: apiBase }, () => {
       showStatus('Settings saved.', true);
     });

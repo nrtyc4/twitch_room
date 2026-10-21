@@ -10,7 +10,9 @@ import (
 
 type WatchStateStore interface {
 	Upsert(userID string, streams []service.Stream, updatedAt time.Time) (service.UserWatchState, error)
+	UpsertMany(states []service.UserWatchState) error
 	Get(userID string) (service.UserWatchState, bool)
+	GetWithError(userID string) (service.UserWatchState, bool, error)
 	List(limit, offset int) []service.UserWatchState
 	Delete(userID string) error
 	DeleteUserData(userID string) error
@@ -88,20 +90,39 @@ func (s *MemoryStore) Upsert(userID string, streams []service.Stream, updatedAt 
 	return state, nil
 }
 
+func (s *MemoryStore) UpsertMany(states []service.UserWatchState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, st := range states {
+		s.items[st.UserID] = service.UserWatchState{
+			UserID:    st.UserID,
+			StreamIDs: append([]string(nil), st.StreamIDs...),
+			Streams:   cloneStreams(st.Streams),
+			UpdatedAt: st.UpdatedAt,
+		}
+	}
+	return nil
+}
+
 func (s *MemoryStore) Get(userID string) (service.UserWatchState, bool) {
+	state, ok, _ := s.GetWithError(userID)
+	return state, ok
+}
+
+func (s *MemoryStore) GetWithError(userID string) (service.UserWatchState, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	state, ok := s.items[userID]
 	if !ok {
-		return service.UserWatchState{}, false
+		return service.UserWatchState{}, false, nil
 	}
 	return service.UserWatchState{
 		UserID:    state.UserID,
 		StreamIDs: append([]string(nil), state.StreamIDs...),
 		Streams:   cloneStreams(state.Streams),
 		UpdatedAt: state.UpdatedAt,
-	}, true
+	}, true, nil
 }
 
 func (s *MemoryStore) List(limit, offset int) []service.UserWatchState {
@@ -282,8 +303,17 @@ func (a *ServiceAdapter) UpsertUserWatchState(userID string, streams []service.S
 	return a.store.Upsert(userID, streams, updatedAt)
 }
 
+func (a *ServiceAdapter) UpsertUserWatchStates(states []service.UserWatchState) error {
+	return a.store.UpsertMany(states)
+}
+
 func (a *ServiceAdapter) GetUserWatchState(userID string) (service.UserWatchState, bool) {
-	return a.store.Get(userID)
+	state, ok, _ := a.store.GetWithError(userID)
+	return state, ok
+}
+
+func (a *ServiceAdapter) GetUserWatchStateWithError(userID string) (service.UserWatchState, bool, error) {
+	return a.store.GetWithError(userID)
 }
 
 func (a *ServiceAdapter) ListActiveUsers(limit, offset int) []service.UserWatchState {

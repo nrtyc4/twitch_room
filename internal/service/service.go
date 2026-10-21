@@ -133,7 +133,9 @@ type UserInfo struct {
 
 type Repository interface {
 	UpsertUserWatchState(userID string, streams []Stream, updatedAt time.Time) (UserWatchState, error)
+	UpsertUserWatchStates(states []UserWatchState) error
 	GetUserWatchState(userID string) (UserWatchState, bool)
+	GetUserWatchStateWithError(userID string) (UserWatchState, bool, error)
 	ListActiveUsers(limit, offset int) []UserWatchState
 	DeleteUserWatchState(userID string) error
 	DeleteUserData(userID string) error
@@ -314,16 +316,24 @@ func (s *Service) RefreshWatchStates(ctx context.Context) ([]string, error) {
 			return allRefreshed, err
 		}
 
+		var changed []UserWatchState
 		for _, state := range states {
 			streams := refreshStreams(state, info)
 			if equalStreams(state.Streams, streams) {
 				continue
 			}
-			if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
-				slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
-				continue
-			}
+			changed = append(changed, UserWatchState{
+				UserID:    state.UserID,
+				StreamIDs: streamIDsFromStreams(streams),
+				Streams:   streams,
+				UpdatedAt: state.UpdatedAt,
+			})
 			allRefreshed = append(allRefreshed, state.UserID)
+		}
+		if len(changed) > 0 {
+			if err := s.repo.UpsertUserWatchStates(changed); err != nil {
+				slog.Error("failed to refresh user watch states", "error", err)
+			}
 		}
 
 		if len(states) < batchSize {
@@ -392,7 +402,10 @@ func (s *Service) GetUserWatchState(userID string) (UserWatchState, error) {
 		return UserWatchState{}, err
 	}
 
-	state, ok := s.repo.GetUserWatchState(userID)
+	state, ok, err := s.repo.GetUserWatchStateWithError(userID)
+	if err != nil {
+		return UserWatchState{}, err
+	}
 	if !ok {
 		return UserWatchState{}, ErrUserNotFound
 	}
@@ -414,7 +427,10 @@ func (s *Service) GetPublicWatchState(publisherID string) (UserWatchState, error
 		return UserWatchState{}, ErrUserNotFound
 	}
 
-	state, ok := s.repo.GetUserWatchState(publisherID)
+	state, ok, err := s.repo.GetUserWatchStateWithError(publisherID)
+	if err != nil {
+		return UserWatchState{}, ErrUserNotFound
+	}
 	if !ok {
 		return UserWatchState{}, ErrUserNotFound
 	}
@@ -482,7 +498,7 @@ func (s *Service) ListFeedContext(ctx context.Context, viewerID string, limit in
 			continue
 		}
 
-		state, ok := s.repo.GetUserWatchState(sub.PublisherID)
+		state, ok, _ := s.repo.GetUserWatchStateWithError(sub.PublisherID)
 		if !ok {
 			continue
 		}
@@ -554,7 +570,7 @@ func (s *Service) ClearUserWatchState(userID string) error {
 		return err
 	}
 
-	if _, ok := s.repo.GetUserWatchState(userID); !ok {
+	if _, ok, _ := s.repo.GetUserWatchStateWithError(userID); !ok {
 		return ErrUserNotFound
 	}
 

@@ -25,6 +25,20 @@ func subscriptionKey(subscriberID, publisherID string) string {
 	return subscriberID + "\x00" + publisherID
 }
 
+func (r *MemoryRepository) UpsertUserWatchStates(states []UserWatchState) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, st := range states {
+		r.items[st.UserID] = UserWatchState{
+			UserID:    st.UserID,
+			StreamIDs: append([]string(nil), st.StreamIDs...),
+			Streams:   append([]Stream(nil), st.Streams...),
+			UpdatedAt: st.UpdatedAt,
+		}
+	}
+	return nil
+}
+
 func (r *MemoryRepository) UpsertUserWatchState(userID string, streams []Stream, updatedAt time.Time) (UserWatchState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -40,19 +54,24 @@ func (r *MemoryRepository) UpsertUserWatchState(userID string, streams []Stream,
 }
 
 func (r *MemoryRepository) GetUserWatchState(userID string) (UserWatchState, bool) {
+	state, ok, _ := r.GetUserWatchStateWithError(userID)
+	return state, ok
+}
+
+func (r *MemoryRepository) GetUserWatchStateWithError(userID string) (UserWatchState, bool, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	state, ok := r.items[userID]
 	if !ok {
-		return UserWatchState{}, false
+		return UserWatchState{}, false, nil
 	}
 	return UserWatchState{
 		UserID:    state.UserID,
 		StreamIDs: append([]string(nil), state.StreamIDs...),
 		Streams:   append([]Stream(nil), state.Streams...),
 		UpdatedAt: state.UpdatedAt,
-	}, true
+	}, true, nil
 }
 
 func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {

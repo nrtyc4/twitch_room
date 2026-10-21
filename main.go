@@ -892,7 +892,9 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 
 	// user:read:follows lets us prefill the watch box with the channels the
 	// user follows that are live right now, so publishing is one click.
-	authURL, err := s.identityProvider.BuildAuthorizeURL(state, []string{"user:read:follows"})
+	// Only request identity; follow-based suggestions are not implemented, so
+	// no additional scopes (or stored user tokens) are needed.
+	authURL, err := s.identityProvider.BuildAuthorizeURL(state, nil)
 	if err != nil {
 		slog.Error("failed to build authorize URL", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "OAuth not configured"})
@@ -943,7 +945,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, accessToken, err := s.identityProvider.ResolveIdentity(r.Context(), r)
+	userID, _, err := s.identityProvider.ResolveIdentity(r.Context(), r)
 	if err != nil {
 		slog.Error("failed to resolve user id from OAuth code", "error", err)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication failed"})
@@ -955,7 +957,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 	// sessions) is kept alongside so follow-based watch suggestions can query
 	// Twitch on the user's behalf.
 	if s.sessions != nil {
-		if err := s.sessions.setSessionCookie(w, r, userID, accessToken); err != nil {
+		if err := s.sessions.setSessionCookie(w, r, userID, ""); err != nil {
 			slog.Error("failed to create session", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 			return
