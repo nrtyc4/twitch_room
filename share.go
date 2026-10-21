@@ -14,7 +14,7 @@ import (
 	"twitch_room/internal/validate"
 )
 
-//go:embed share_page.html
+//go:embed share_page.html extension/share.css extension/share.js
 var sharePageFS embed.FS
 
 var sharePageTmpl = template.Must(template.ParseFS(sharePageFS, "share_page.html"))
@@ -103,7 +103,7 @@ func (s *server) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	// The share page is a self-contained document with inline styles and a
 	// small script; allow them for this route only.
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv data:; connect-src 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv data:; connect-src 'self'")
 	if err := sharePageTmpl.Execute(w, data); err != nil {
 		slog.Error("failed to render share page", "error", err)
 	}

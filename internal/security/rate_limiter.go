@@ -43,6 +43,7 @@ func (rl *RateLimiter) Allow(key string) bool {
 	}
 
 	entries := rl.requests[key]
+	// Reuse the backing array of entries to reduce memory allocations.
 	filtered := entries[:0]
 	for _, t := range entries {
 		if t.After(cutoff) {

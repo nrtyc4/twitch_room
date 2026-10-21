@@ -54,7 +54,7 @@ func (r *MemoryRepository) GetUserWatchState(userID string) (UserWatchState, boo
 	}, true
 }
 
-func (r *MemoryRepository) ListActiveUsers(limit int) []UserWatchState {
+func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -72,11 +72,17 @@ func (r *MemoryRepository) ListActiveUsers(limit int) []UserWatchState {
 		})
 	}
 
-	if len(states) > limit {
-		states = states[:limit]
+	start := offset
+	if start > len(states) {
+		return []UserWatchState{}
 	}
 
-	return states
+	end := start + limit
+	if end > len(states) {
+		end = len(states)
+	}
+
+	return states[start:end]
 }
 
 func (r *MemoryRepository) DeleteUserWatchState(userID string) {

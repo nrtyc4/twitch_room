@@ -54,7 +54,7 @@ func (e *bareEnricher) LookupStreams(ctx context.Context, logins []string) (map[
 
 func TestSetUserWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	state, err := svc.SetUserWatchState("user-1", []string{"stream-1", "stream-2"})
 	if err != nil {
@@ -72,7 +72,7 @@ func TestSetUserWatchState(t *testing.T) {
 
 func TestSetUserWatchStateRejectsStrictnessViolations(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	if _, err := svc.SetUserWatchState("bad/user", []string{"stream-1"}); !errors.Is(err, ErrInvalidUser) {
 		t.Fatalf("expected ErrInvalidUser for malformed user id, got %v", err)
@@ -101,7 +101,7 @@ func TestSetUserWatchStateRejectsStrictnessViolations(t *testing.T) {
 
 func TestSubscribeRejectsMalformedPublisher(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	if _, err := svc.Subscribe("viewer", "publisher/id"); !errors.Is(err, ErrInvalidSubscription) {
 		t.Fatalf("expected ErrInvalidSubscription for malformed publisher id, got %v", err)
@@ -110,7 +110,7 @@ func TestSubscribeRejectsMalformedPublisher(t *testing.T) {
 
 func TestCanViewRejectsMalformedIDs(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	if _, err := svc.CanView("viewer", "publisher id"); !errors.Is(err, ErrInvalidUser) {
 		t.Fatalf("expected ErrInvalidUser for malformed ids, got %v", err)
@@ -119,7 +119,7 @@ func TestCanViewRejectsMalformedIDs(t *testing.T) {
 
 func TestGetPublicWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
 
@@ -154,7 +154,7 @@ func TestResolveDisplayName(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewServiceWithEnricher(repo, time.Minute, &fakeEnricher{
 		users: map[string]string{"publisher-a": "Best Publisher"},
-	})
+	}, RealClock{})
 	if got := svc.ResolveDisplayName("publisher-a"); got != "Best Publisher" {
 		t.Fatalf("expected resolved name, got %q", got)
 	}
@@ -165,7 +165,7 @@ func TestResolveDisplayName(t *testing.T) {
 
 func TestGetUserWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, err := svc.SetUserWatchState("user-2", []string{"stream-9"})
 	if err != nil {
@@ -184,7 +184,7 @@ func TestGetUserWatchState(t *testing.T) {
 
 func TestListFeed(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.SetUserWatchState("user-1", []string{"stream-1"})
 	_, _ = svc.SetUserWatchState("user-2", []string{"stream-2"})
@@ -204,7 +204,7 @@ func TestListFeed(t *testing.T) {
 
 func TestListFeedOnlyShowsSubscriptions(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.SetUserWatchState("user-1", []string{"stream-1"})
 	_, _ = svc.SetUserWatchState("user-2", []string{"stream-2"})
@@ -228,7 +228,7 @@ func TestListFeedOnlyShowsSubscriptions(t *testing.T) {
 
 func TestSubscribeOpenMode(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	sub, err := svc.Subscribe("viewer", "publisher")
 	if err != nil {
@@ -250,7 +250,7 @@ func TestSubscribeOpenMode(t *testing.T) {
 
 func TestSubscribeToSelfFails(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	if _, err := svc.Subscribe("user-1", "user-1"); err != ErrCannotSubscribeToSelf {
 		t.Fatalf("expected ErrCannotSubscribeToSelf, got %v", err)
@@ -259,7 +259,7 @@ func TestSubscribeToSelfFails(t *testing.T) {
 
 func TestSubscribeApprovedMode(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, err := svc.UpdatePublisherSettings(PublisherSettings{
 		UserID:           "publisher",
@@ -306,7 +306,7 @@ func TestSubscribeApprovedMode(t *testing.T) {
 
 func TestRespondToSubscriberRejectsRemovesRequest(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.UpdatePublisherSettings(PublisherSettings{
 		UserID:           "publisher",
@@ -330,7 +330,7 @@ func TestRespondToSubscriberRejectsRemovesRequest(t *testing.T) {
 
 func TestCanViewVisibility(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	// Self always allowed.
 	if ok, _ := svc.CanView("user-1", "user-1"); !ok {
@@ -381,7 +381,7 @@ func TestCanViewVisibility(t *testing.T) {
 
 func TestPrivatePublisherNotInFeed(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.UpdatePublisherSettings(PublisherSettings{
 		UserID:           "publisher",
@@ -401,7 +401,7 @@ func TestPrivatePublisherNotInFeed(t *testing.T) {
 
 func TestUnsubscribe(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	if _, err := svc.Subscribe("viewer", "publisher"); err != nil {
 		t.Fatalf("subscribe failed: %v", err)
@@ -426,7 +426,7 @@ func TestUnsubscribe(t *testing.T) {
 
 func TestUpdatePublisherSettingsValidation(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, err := svc.UpdatePublisherSettings(PublisherSettings{
 		UserID:           "user-1",
@@ -449,7 +449,7 @@ func TestUpdatePublisherSettingsValidation(t *testing.T) {
 
 func TestClearUserWatchState(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, time.Minute)
+	svc := NewService(repo, time.Minute, RealClock{})
 
 	_, _ = svc.SetUserWatchState("user-3", []string{"stream-7"})
 
@@ -465,7 +465,7 @@ func TestClearUserWatchState(t *testing.T) {
 
 func TestExpiredStateIsRemoved(t *testing.T) {
 	repo := NewMemoryRepository()
-	svc := NewService(repo, 10*time.Millisecond)
+	svc := NewService(repo, 10*time.Millisecond, RealClock{})
 
 	_, _ = svc.SetUserWatchState("user-4", []string{"stream-5"})
 	time.Sleep(50 * time.Millisecond)
@@ -484,7 +484,7 @@ func TestSetUserWatchStateEnriches(t *testing.T) {
 			"stream-2": {Exists: true, IsLive: false, ChannelName: "Stream Two"},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	state, err := svc.SetUserWatchState("user-1", []string{"stream-1", "stream-2"})
 	if err != nil {
@@ -524,7 +524,7 @@ func TestSetUserWatchStateRejectsUnknownChannel(t *testing.T) {
 			"stream-1": {Exists: true, ChannelName: "Stream One"},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	_, err := svc.SetUserWatchState("user-1", []string{"stream-1", "does-not-exist"})
 	if !errors.Is(err, ErrStreamNotFound) {
@@ -539,7 +539,7 @@ func TestSetUserWatchStateRejectsUnknownChannel(t *testing.T) {
 func TestSetUserWatchStateDegradesOnEnricherError(t *testing.T) {
 	repo := NewMemoryRepository()
 	enricher := &fakeEnricher{err: errors.New("twitch down")}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	state, err := svc.SetUserWatchState("user-1", []string{"stream-1"})
 	if err != nil {
@@ -561,7 +561,7 @@ func TestListFeedUsesEnrichedStreams(t *testing.T) {
 			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "title-1", GameName: "GameX", ViewerCount: 3},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	_, _ = svc.SetUserWatchState("user-1", []string{"stream-1"})
 	if _, err := svc.Subscribe("viewer", "user-1"); err != nil {
@@ -589,7 +589,7 @@ func TestListFeedUsesPublisherDisplayNames(t *testing.T) {
 		},
 		users: map[string]string{"publisher-a": "Publisher A"},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
 	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
@@ -612,7 +612,7 @@ func TestListFeedFallsBackToRawUserID(t *testing.T) {
 		info:  map[string]StreamInfo{"stream-1": {Exists: true, ChannelName: "Stream One"}},
 		users: map[string]string{},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
 	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
@@ -629,7 +629,7 @@ func TestListFeedWithoutUserResolverUsesRawID(t *testing.T) {
 	repo := NewMemoryRepository()
 	svc := NewServiceWithEnricher(repo, time.Minute, &bareEnricher{
 		info: map[string]StreamInfo{"stream-1": {Exists: true}},
-	})
+	}, RealClock{})
 
 	_, _ = svc.SetUserWatchState("publisher-a", []string{"stream-1"})
 	if _, err := svc.Subscribe("viewer", "publisher-a"); err != nil {
@@ -662,7 +662,7 @@ func TestRefreshWatchStatesSkipsUnchanged(t *testing.T) {
 			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "t", ViewerCount: 3},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher, RealClock{})
 
 	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
 		t.Fatalf("SetUserWatchState: %v", err)
@@ -684,7 +684,7 @@ func TestRefreshWatchStatesUpdatesMetadata(t *testing.T) {
 			"stream-1": {Exists: true, IsLive: false, ChannelName: "Stream One"},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher, RealClock{})
 
 	state, err := svc.SetUserWatchState("user-1", []string{"stream-1"})
 	if err != nil {
@@ -722,7 +722,7 @@ func TestRefreshWatchStatesClearsOfflineMetadata(t *testing.T) {
 			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "old title", ViewerCount: 5},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher, RealClock{})
 
 	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
 		t.Fatalf("SetUserWatchState: %v", err)
@@ -749,7 +749,7 @@ func TestRefreshWatchStatesPreservesMissingChannels(t *testing.T) {
 			"stream-1": {Exists: true, IsLive: true, ChannelName: "Stream One", Title: "live title", ViewerCount: 3},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher, RealClock{})
 
 	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
 		t.Fatalf("SetUserWatchState: %v", err)
@@ -777,7 +777,7 @@ func TestRefreshWatchStatesDeletesExpired(t *testing.T) {
 			"stream-2": {Exists: true},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, 10*time.Millisecond, enricher)
+	svc := NewServiceWithEnricher(repo, 10*time.Millisecond, enricher, RealClock{})
 
 	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
 		t.Fatalf("SetUserWatchState: %v", err)
@@ -805,7 +805,7 @@ func TestRefreshWatchStatesDeletesExpired(t *testing.T) {
 func TestRefreshWatchStatesDelegatesLookupError(t *testing.T) {
 	repo := NewMemoryRepository()
 	enricher := &fakeEnricher{err: errors.New("twitch down")}
-	svc := NewServiceWithEnricher(repo, time.Hour, enricher)
+	svc := NewServiceWithEnricher(repo, time.Hour, enricher, RealClock{})
 
 	if _, err := svc.SetUserWatchState("user-1", []string{"stream-1"}); err != nil {
 		t.Fatalf("SetUserWatchState: %v", err)
@@ -834,7 +834,7 @@ func TestMetricsSnapshot(t *testing.T) {
 			"stream-2": {Exists: true, IsLive: true},
 		},
 	}
-	svc := NewServiceWithEnricher(repo, time.Minute, enricher)
+	svc := NewServiceWithEnricher(repo, time.Minute, enricher, RealClock{})
 
 	// Two watch states: one fresh within the TTL, one stale.
 	_, _ = svc.SetUserWatchState("publisher", []string{"stream-1"})

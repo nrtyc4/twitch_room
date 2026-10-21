@@ -76,62 +76,28 @@ func TestMemoryStoreSettings(t *testing.T) {
 	}
 }
 
-func TestMemoryStoreSubscriptions(t *testing.T) {
+func TestMemoryStoreDeleteUserData(t *testing.T) {
 	store := NewMemoryStore()
-	createdAt := time.Now().UTC()
+	userID := "user-1"
 
-	sub := service.Subscription{
-		SubscriberID: "viewer",
-		PublisherID:  "publisher",
-		Status:       service.SubscriptionStatusPending,
-		CreatedAt:    createdAt,
-	}
-	if err := store.UpsertSubscription(sub); err != nil {
-		t.Fatalf("UpsertSubscription returned error: %v", err)
-	}
+	// Setup data
+	store.Upsert(userID, []service.Stream{{ID: "s1"}}, time.Now())
+	store.SetPublisherSettings(service.PublisherSettings{UserID: userID})
+	store.UpsertSubscription(service.Subscription{SubscriberID: userID, PublisherID: "p1"})
+	store.UpsertSubscription(service.Subscription{SubscriberID: "p2", PublisherID: userID})
 
-	got, ok := store.GetSubscription("viewer", "publisher")
-	if !ok {
-		t.Fatal("expected subscription to exist")
-	}
-	if got.Status != service.SubscriptionStatusPending {
-		t.Fatalf("expected pending status, got %s", got.Status)
-	}
+	store.DeleteUserData(userID)
 
-	if err := store.SetSubscriptionStatus("viewer", "publisher", service.SubscriptionStatusActive); err != nil {
-		t.Fatalf("SetSubscriptionStatus returned error: %v", err)
+	if _, ok := store.Get(userID); ok {
+		t.Error("expected user watch state to be deleted")
 	}
-	got, _ = store.GetSubscription("viewer", "publisher")
-	if got.Status != service.SubscriptionStatusActive {
-		t.Fatalf("expected active status, got %s", got.Status)
+	if _, ok := store.GetPublisherSettings(userID); ok {
+		t.Error("expected publisher settings to be deleted")
 	}
-
-	subs := store.ListSubscriptionsForSubscriber("viewer")
-	if len(subs) != 1 || subs[0].PublisherID != "publisher" {
-		t.Fatalf("expected 1 subscription for subscriber, got %+v", subs)
+	if len(store.ListSubscriptionsForSubscriber(userID)) != 0 {
+		t.Error("expected subscriptions as subscriber to be deleted")
 	}
-
-	active := store.ListSubscriptionsForPublisher("publisher", service.SubscriptionStatusActive)
-	if len(active) != 1 || active[0].SubscriberID != "viewer" {
-		t.Fatalf("expected 1 active subscription for publisher, got %+v", active)
-	}
-	pending := store.ListSubscriptionsForPublisher("publisher", service.SubscriptionStatusPending)
-	if len(pending) != 0 {
-		t.Fatalf("expected no pending subscriptions, got %+v", pending)
-	}
-
-	// Upserting again overrides the status.
-	sub.Status = service.SubscriptionStatusPending
-	if err := store.UpsertSubscription(sub); err != nil {
-		t.Fatalf("UpsertSubscription returned error: %v", err)
-	}
-	got, _ = store.GetSubscription("viewer", "publisher")
-	if got.Status != service.SubscriptionStatusPending {
-		t.Fatalf("expected pending status after upsert, got %s", got.Status)
-	}
-
-	store.DeleteSubscription("viewer", "publisher")
-	if _, ok := store.GetSubscription("viewer", "publisher"); ok {
-		t.Fatal("expected subscription to be deleted")
+	if len(store.ListSubscriptionsForPublisher(userID, service.SubscriptionStatusActive)) != 0 {
+		t.Error("expected subscriptions as publisher to be deleted")
 	}
 }

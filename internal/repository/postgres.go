@@ -151,7 +151,7 @@ func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
 }
 
 // List retrieves the most recent user watch states up to the limit.
-func (ps *PostgresStore) List(limit int) []service.UserWatchState {
+func (ps *PostgresStore) List(limit, offset int) []service.UserWatchState {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -160,10 +160,10 @@ func (ps *PostgresStore) List(limit int) []service.UserWatchState {
 	SELECT user_id, stream_ids, streams, updated_at
 	FROM user_watch_state
 	ORDER BY updated_at DESC
-	LIMIT $1
+	LIMIT $1 OFFSET $2
 	`
 
-	rows, err := ps.db.Query(query, limit)
+	rows, err := ps.db.Query(query, limit, offset)
 	if err != nil {
 		return []service.UserWatchState{}
 	}
@@ -214,11 +214,12 @@ func buildWatchState(userID string, streamIDsResult pq.StringArray, streamsResul
 }
 
 // Delete removes a user's watch state.
-func (ps *PostgresStore) Delete(userID string) {
+func (ps *PostgresStore) Delete(userID string) error {
 	query := `DELETE FROM user_watch_state WHERE user_id = $1`
 	if _, err := ps.db.Exec(query, userID); err != nil {
-		slog.Warn("failed to delete watch state", "user_id", userID, "error", err)
+		return fmt.Errorf("failed to delete watch state: %w", err)
 	}
+	return nil
 }
 
 // DeleteUserData removes all data associated with a user.
@@ -364,11 +365,12 @@ func (ps *PostgresStore) SetSubscriptionStatus(subscriberID, publisherID string,
 }
 
 // DeleteSubscription removes a subscription.
-func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) {
+func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) error {
 	query := `DELETE FROM subscriptions WHERE subscriber_id = $1 AND publisher_id = $2`
 	if _, err := ps.db.Exec(query, subscriberID, publisherID); err != nil {
-		slog.Warn("failed to delete subscription", "subscriber_id", subscriberID, "publisher_id", publisherID, "error", err)
+		return fmt.Errorf("failed to delete subscription: %w", err)
 	}
+	return nil
 }
 
 func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) []service.Subscription {

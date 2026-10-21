@@ -143,6 +143,7 @@ func newRouter(s *server) (*http.ServeMux, error) {
 	mux.HandleFunc("/auth/me", s.handleMe)
 	mux.HandleFunc("/auth/logout", s.handleLogout)
 	mux.HandleFunc("/u/", s.handleSharePage)
+	mux.Handle("/extension/", http.FileServer(http.FS(sharePageFS)))
 
 	// The service is a headless API; there is no embedded web UI. Any path
 	// that does not match a registered route (including "/") gets a 404.
@@ -152,6 +153,10 @@ func newRouter(s *server) (*http.ServeMux, error) {
 
 	return mux, nil
 }
+
+type clock struct{}
+
+func (clock) Now() time.Time { return time.Now().UTC() }
 
 func main() {
 	var suggestor followedSuggestor
@@ -206,8 +211,8 @@ func main() {
 	if dbDSN != "" {
 		pgStore, err := repository.NewPostgresStore(dbDSN)
 		if err != nil {
-			slog.Warn("failed to connect to PostgreSQL, falling back to in-memory store", "error", err)
-			store = repository.NewMemoryStore()
+			slog.Error("failed to connect to PostgreSQL", "error", err)
+			os.Exit(1)
 		} else {
 			slog.Info("connected to PostgreSQL database")
 			store = pgStore
@@ -240,14 +245,14 @@ func main() {
 			}
 		}
 	}()
-	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute)
+	svc := service.NewService(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, clock{})
 
 	// Enrich published streams with Twitch metadata when app credentials exist
 	// (the local .env carries them; the docker-compose build intentionally does
 	// not, so the container publishes plain logins).
 	if sec.TwitchClientID != "" && sec.TwitchClientSecret != "" {
 		enricher := twitchapi.NewClient(sec.TwitchClientID, sec.TwitchClientSecret)
-		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher)
+		svc = service.NewServiceWithEnricher(repo, time.Duration(cfg.WatchStateTTLMin)*time.Minute, enricher, clock{})
 		suggestor = enricher
 		slog.Info("Twitch enrichment enabled")
 		go func(c *twitchapi.Client) {

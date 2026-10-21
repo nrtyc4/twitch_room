@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"twitch_room/internal/validate"
@@ -26,7 +26,7 @@ var (
 )
 
 // MaxStreamsPerWatch caps the number of streams a single watch state may
-// hold, matching the strict 1MB request body budget with a sane upper bound.
+// hold, matching the strict 1MB request body budget with a carefully chosen upper bound.
 const MaxStreamsPerWatch = 50
 
 type SubscriptionMode string
@@ -134,9 +134,9 @@ type UserInfo struct {
 type Repository interface {
 	UpsertUserWatchState(userID string, streams []Stream, updatedAt time.Time) (UserWatchState, error)
 	GetUserWatchState(userID string) (UserWatchState, bool)
-	ListActiveUsers(limit int) []UserWatchState
-	DeleteUserWatchState(userID string)
-	DeleteUserData(userID string)
+	ListActiveUsers(limit, offset int) []UserWatchState
+	DeleteUserWatchState(userID string) error
+	DeleteUserData(userID string) error
 	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings PublisherSettings) error
@@ -147,30 +147,54 @@ type Repository interface {
 	ListSubscriptionsForSubscriber(subscriberID string) []Subscription
 	ListSubscriptionsForPublisher(publisherID string, status SubscriptionStatus) []Subscription
 	SetSubscriptionStatus(subscriberID, publisherID string, status SubscriptionStatus) error
-	DeleteSubscription(subscriberID, publisherID string)
+	DeleteSubscription(subscriberID, publisherID string) error
 	CountSubscriptionsByStatus() map[SubscriptionStatus]int
 }
 
-type Service struct {
-	mu        sync.RWMutex
-	repo      Repository
-	actionTTL time.Duration
-	enricher  StreamEnricher
+// Clock provides a way to inject time for testing purposes.
+
+type Clock interface {
+
+	Now() time.Time
+
 }
 
-func NewService(repo Repository, actionTTL time.Duration) *Service {
+type RealClock struct{}
+
+
+func (RealClock) Now() time.Time { return time.Now().UTC() }
+
+
+
+type Service struct {
+
+	repo      Repository
+
+	actionTTL time.Duration
+
+	enricher  StreamEnricher
+
+	clock     Clock
+
+}
+
+func NewService(repo Repository, actionTTL time.Duration, clock Clock) *Service {
 	if actionTTL <= 0 {
 		actionTTL = 5 * time.Minute
+	}
+	if clock == nil {
+		clock = RealClock{}
 	}
 
 	return &Service{
 		repo:      repo,
 		actionTTL: actionTTL,
+		clock:     clock,
 	}
 }
 
-func NewServiceWithEnricher(repo Repository, actionTTL time.Duration, enricher StreamEnricher) *Service {
-	svc := NewService(repo, actionTTL)
+func NewServiceWithEnricher(repo Repository, actionTTL time.Duration, enricher StreamEnricher, clock Clock) *Service {
+	svc := NewService(repo, actionTTL, clock)
 	svc.enricher = enricher
 	return svc
 }
@@ -199,7 +223,7 @@ func (s *Service) SetUserWatchStateContext(ctx context.Context, userID string, s
 		}
 	}
 
-	now := time.Now().UTC()
+	now := s.clock.Now()
 	streams, err := s.resolveStreams(ctx, cleaned, now)
 	if err != nil {
 		return UserWatchState{}, err
@@ -268,46 +292,77 @@ func (s *Service) resolveStreams(ctx context.Context, logins []string, now time.
 // removed and no metadata changes are made.
 func (s *Service) RefreshWatchStates(ctx context.Context) ([]string, error) {
 	const batchLimit = 1000
+	var allRefreshed []string
+	offset := 0
 
-	states := s.repo.ListActiveUsers(batchLimit)
-	live := make([]UserWatchState, 0, len(states))
-	for _, state := range states {
-		if s.isExpired(state.UpdatedAt) {
-			s.repo.DeleteUserWatchState(state.UserID)
+	for {
+		states := s.repo.ListActiveUsers(batchLimit, offset)
+		if len(states) == 0 {
+			break
+		}
+
+		deletedInThisBatch := false
+		live := make([]UserWatchState, 0, len(states))
+		for _, state := range states {
+			if s.isExpired(state.UpdatedAt) {
+				s.repo.DeleteUserWatchState(state.UserID)
+				deletedInThisBatch = true
+				continue
+			}
+			live = append(live, state)
+		}
+
+		if deletedInThisBatch {
 			continue
 		}
-		live = append(live, state)
-	}
 
-	if s.enricher == nil || len(live) == 0 {
-		return nil, nil
-	}
-
-	logins := make([]string, 0, len(live))
-	for _, state := range live {
-		for _, id := range watchLogins(state) {
-			logins = append(logins, id)
-		}
-	}
-	logins = normalizeStreamIDs(logins)
-
-	info, err := s.enricher.LookupStreams(ctx, logins)
-	if err != nil {
-		return nil, err
-	}
-
-	refreshed := make([]string, 0, len(live))
-	for _, state := range live {
-		streams := refreshStreams(state, info)
-		if equalStreams(state.Streams, streams) {
+		if len(live) == 0 {
+			offset += batchLimit
+			if len(states) < batchLimit {
+				break
+			}
 			continue
 		}
-		if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
-			return nil, err
+
+		if s.enricher == nil {
+			offset += batchLimit
+			if len(states) < batchLimit {
+				break
+			}
+			continue
 		}
-		refreshed = append(refreshed, state.UserID)
+
+		logins := make([]string, 0, len(live))
+		for _, state := range live {
+			for _, id := range watchLogins(state) {
+				logins = append(logins, id)
+			}
+		}
+		logins = normalizeStreamIDs(logins)
+
+		info, err := s.enricher.LookupStreams(ctx, logins)
+		if err != nil {
+			return allRefreshed, err
+		}
+
+		for _, state := range live {
+			streams := refreshStreams(state, info)
+			if equalStreams(state.Streams, streams) {
+				continue
+			}
+			if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
+				slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
+				continue
+			}
+			allRefreshed = append(allRefreshed, state.UserID)
+		}
+
+		if len(states) < batchLimit {
+			break
+		}
+		offset += batchLimit
 	}
-	return refreshed, nil
+	return allRefreshed, nil
 }
 
 // equalStreams reports whether two stream slices carry identical metadata.
@@ -432,7 +487,7 @@ func (s *Service) ResolveDisplayNameContext(ctx context.Context, userID string) 
 // many watch states are currently live (not expired) and how subscriptions
 // are distributed across statuses.
 func (s *Service) MetricsSnapshot() MetricsSnapshot {
-	cutoff := time.Now().UTC().Add(-s.actionTTL)
+	cutoff := s.clock.Now().Add(-s.actionTTL)
 	return MetricsSnapshot{
 		ActiveWatchStates:     s.repo.CountActiveWatchStates(cutoff),
 		SubscriptionsByStatus: s.repo.CountSubscriptionsByStatus(),
@@ -533,7 +588,9 @@ func (s *Service) ClearUserWatchState(userID string) error {
 		return ErrUserNotFound
 	}
 
-	s.repo.DeleteUserWatchState(userID)
+	if err := s.repo.DeleteUserWatchState(userID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -543,7 +600,9 @@ func (s *Service) DeleteUser(userID string) error {
 	if err := checkUserID(userID); err != nil {
 		return err
 	}
-	s.repo.DeleteUserData(userID)
+	if err := s.repo.DeleteUserData(userID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -608,7 +667,7 @@ func (s *Service) Subscribe(subscriberID, publisherID string) (Subscription, err
 		SubscriberID: subscriberID,
 		PublisherID:  publisherID,
 		Status:       status,
-		CreatedAt:    time.Now().UTC(),
+		CreatedAt:    s.clock.Now(),
 	}
 
 	if err := s.repo.UpsertSubscription(sub); err != nil {
@@ -621,12 +680,13 @@ func (s *Service) Unsubscribe(subscriberID, publisherID string) error {
 	if err := checkIDPair(subscriberID, publisherID); err != nil {
 		return err
 	}
-
 	if _, ok := s.repo.GetSubscription(subscriberID, publisherID); !ok {
 		return ErrNotSubscribed
 	}
 
-	s.repo.DeleteSubscription(subscriberID, publisherID)
+	if err := s.repo.DeleteSubscription(subscriberID, publisherID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -664,7 +724,9 @@ func (s *Service) RespondToSubscriber(publisherID, subscriberID string, approve 
 		return s.repo.SetSubscriptionStatus(subscriberID, publisherID, SubscriptionStatusActive)
 	}
 
-	s.repo.DeleteSubscription(subscriberID, publisherID)
+	if err := s.repo.DeleteSubscription(subscriberID, publisherID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -700,7 +762,7 @@ func (s *Service) CanView(viewerID, publisherID string) (bool, error) {
 }
 
 func (s *Service) isExpired(updatedAt time.Time) bool {
-	return time.Since(updatedAt) > s.actionTTL
+	return s.clock.Now().Sub(updatedAt) > s.actionTTL
 }
 
 func streamIDsFromStreams(streams []Stream) []string {

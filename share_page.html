@@ -1,114 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
-<meta http-equiv="refresh" content="300">
-<title>{{.DisplayName}} is watching</title>
-<style>
-  :root {
-    --bg: #0e0e12;
-    --card: #181820;
-    --text: #e8e8ec;
-    --muted: #9a9aa5;
-    --accent: #9146ff;
-    --live: #eb0400;
-    --off: #3d3d47;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #23232e;
-  }
-  header h1 { margin: 0; font-size: 1.1rem; }
-  header a { color: var(--muted); text-decoration: none; }
-  header a:hover { color: var(--text); }
-  main { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
-  h2 { margin: 0 0 .25rem; }
-  .user-name { color: var(--accent); }
-  .meta { color: var(--muted); font-size: .85rem; }
-  .streams { display: flex; flex-direction: column; gap: 1rem; margin-top: 1.25rem; }
-  .stream {
-    display: flex;
-    gap: 1rem;
-    background: var(--card);
-    border-radius: 10px;
-    padding: .75rem;
-  }
-  .thumb, .placeholder {
-    width: 160px;
-    aspect-ratio: 16 / 9;
-    border-radius: 6px;
-    object-fit: cover;
-    flex: none;
-  }
-  .thumb.placeholder { background: var(--off); }
-  .stream .body { display: flex; flex-direction: column; justify-content: center; }
-  .name { font-weight: 600; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
-  .name a { color: var(--text); text-decoration: none; }
-  .badge {
-    font-size: .7rem;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-    padding: .15rem .5rem;
-    border-radius: 999px;
-  }
-  .live { background: var(--live); color: #fff; }
-  .off { background: var(--off); color: var(--muted); }
-  .title { color: var(--muted); margin-top: .2rem; }
-  .game { color: var(--accent); font-size: .85rem; margin-top: .15rem; }
-  .empty { color: var(--muted); margin-top: 1.25rem; }
-  footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .8rem; }
-  footer a { color: var(--muted); }
-
-  /* Responsive */
-  @media (max-width: 480px) {
-    .stream { flex-direction: column; }
-    .thumb, .placeholder { width: 100%; }
-    header { flex-direction: column; align-items: flex-start; }
-  }
-
-  /* Light theme */
-  body.light {
-    --bg: #f7f7f8;
-    --card: #ffffff;
-    --text: #0e0e10;
-    --muted: #5a5a66;
-    --accent: #9146ff;
-    --live: #eb0400;
-    --off: #d8d8de;
-  }
-  body.light header { border-bottom-color: #e2e2e8; }
-
-  .theme-toggle, .refresh-btn {
-    background: var(--card);
-    color: var(--text);
-    border: 1px solid var(--muted);
-    border-radius: 6px;
-    padding: .35rem .7rem;
-    cursor: pointer;
-    font-size: .8rem;
-  }
-  .controls { display: flex; gap: .5rem; align-items: center; }
-  .watch-link { display: inline-block; margin-top: .5rem; color: var(--accent); text-decoration: none; font-size: .85rem; }
-  .watch-link:hover { text-decoration: underline; }
-
-  .stream { transition: transform .15s, box-shadow .15s; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
-  .stream:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.3); }
-  header a, .controls button { transition: opacity .2s; }
-  header a:hover, .controls button:hover { opacity: .8; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="refresh" content="300">
+  <title>{{.DisplayName}} is watching</title>
+  <link rel="stylesheet" href="/extension/share.css">
 </head>
 <body>
 <header>
@@ -148,29 +46,6 @@
   {{end}}
 </main>
 <footer>Watch Room · not affiliated with or endorsed by Twitch</footer>
-<script>
-  // Theme toggle
-  (function() {
-    const saved = localStorage.getItem('wr-theme');
-    if (saved === 'light') document.body.classList.add('light');
-    document.getElementById('theme-btn').addEventListener('click', () => {
-      document.body.classList.toggle('light');
-      localStorage.setItem('wr-theme', document.body.classList.contains('light') ? 'light' : 'dark');
-    });
-  })();
-  // Client-side refresh
-  document.getElementById('refresh-btn').addEventListener('click', async () => {
-    try {
-      const res = await fetch(location.href, { cache: 'no-store' });
-      if (!res.ok) throw new Error(res.status);
-      const html = await res.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const newMain = doc.querySelector('main');
-      if (newMain) document.querySelector('main').replaceWith(newMain);
-    } catch (e) {
-      console.error('Refresh failed', e);
-    }
-  });
-</script>
+<script src="/extension/share.js"></script>
 </body>
 </html>
