@@ -291,77 +291,61 @@ func (s *Service) resolveStreams(ctx context.Context, logins []string, now time.
 // stored updated_at is preserved. Without an enricher only expired states are
 // removed and no metadata changes are made.
 func (s *Service) RefreshWatchStates(ctx context.Context) ([]string, error) {
-	const batchLimit = 1000
-	var allRefreshed []string
-	offset := 0
-
-	for {
-		states := s.repo.ListActiveUsers(batchLimit, offset)
-		if len(states) == 0 {
-			break
-		}
-
-		deletedInThisBatch := false
-		live := make([]UserWatchState, 0, len(states))
-		for _, state := range states {
-			if s.isExpired(state.UpdatedAt) {
-				s.repo.DeleteUserWatchState(state.UserID)
-				deletedInThisBatch = true
-				continue
-			}
-			live = append(live, state)
-		}
-
-		if deletedInThisBatch {
-			continue
-		}
-
-		if len(live) == 0 {
-			offset += batchLimit
-			if len(states) < batchLimit {
-				break
-			}
-			continue
-		}
-
-		if s.enricher == nil {
-			offset += batchLimit
-			if len(states) < batchLimit {
-				break
-			}
-			continue
-		}
-
-		logins := make([]string, 0, len(live))
-		for _, state := range live {
-			for _, id := range watchLogins(state) {
-				logins = append(logins, id)
-			}
-		}
-		logins = normalizeStreamIDs(logins)
-
-		info, err := s.enricher.LookupStreams(ctx, logins)
-		if err != nil {
-			return allRefreshed, err
-		}
-
-		for _, state := range live {
-			streams := refreshStreams(state, info)
-			if equalStreams(state.Streams, streams) {
-				continue
-			}
-			if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
-				slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
-				continue
-			}
-			allRefreshed = append(allRefreshed, state.UserID)
-		}
-
-		if len(states) < batchLimit {
-			break
-		}
-		offset += batchLimit
+	states := s.repo.ListActiveUsers(0, 0)
+	if len(states) == 0 {
+		return nil, nil
 	}
+
+	var allRefreshed []string
+	deletedInThisBatch := false
+	live := make([]UserWatchState, 0, len(states))
+	for _, state := range states {
+		if s.isExpired(state.UpdatedAt) {
+			s.repo.DeleteUserWatchState(state.UserID)
+			deletedInThisBatch = true
+			continue
+		}
+		live = append(live, state)
+	}
+
+	if deletedInThisBatch {
+		// If we deleted some, we might need to re-process if we want to be thorough,
+		// but for simplicity, we just continue with the live ones.
+	}
+
+	if len(live) == 0 {
+		return allRefreshed, nil
+	}
+
+	if s.enricher == nil {
+		return allRefreshed, nil
+	}
+
+	logins := make([]string, 0, len(live))
+	for _, state := range live {
+		for _, id := range watchLogins(state) {
+			logins = append(logins, id)
+		}
+	}
+	logins = normalizeStreamIDs(logins)
+
+	info, err := s.enricher.LookupStreams(ctx, logins)
+	if err != nil {
+		return allRefreshed, err
+	}
+
+	for _, state := range live {
+		streams := refreshStreams(state, info)
+		if equalStreams(state.Streams, streams) {
+			continue
+		}
+		if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
+			slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
+			continue
+		}
+		allRefreshed = append(allRefreshed, state.UserID)
+	}
+
 	return allRefreshed, nil
 }
 

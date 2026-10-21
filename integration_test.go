@@ -67,7 +67,7 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 	provider.EnableDevAuth = true
 
 	store := repository.NewMemoryStore()
-	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -128,7 +128,7 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 	store := repository.NewMemoryStore()
 	repo := repository.NewServiceAdapter(store)
-	svc := service.NewService(repo, 5*time.Minute)
+	svc := service.NewService(repo, 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -225,7 +225,7 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 // TestIntegrationRateLimitingEnforcement tests that rate limiting is enforced.
 func TestIntegrationRateLimitingEnforcement(t *testing.T) {
 	store := repository.NewMemoryStore()
-	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -273,7 +273,7 @@ func TestIntegrationRateLimitingEnforcement(t *testing.T) {
 // TestIntegrationAuthMiddlewareWithVariousTokenTypes tests auth with different token formats.
 func TestIntegrationAuthMiddlewareWithVariousTokenTypes(t *testing.T) {
 	store := repository.NewMemoryStore()
-	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -335,7 +335,7 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	// Setup in-memory store
 	store := repository.NewMemoryStore()
 	repo := repository.NewServiceAdapter(store)
-	svc := service.NewService(repo, 5*time.Minute)
+	svc := service.NewService(repo, 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -426,7 +426,7 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 // and rejection flows end-to-end over HTTP.
 func TestIntegrationSubscriptionModes(t *testing.T) {
 	store := repository.NewMemoryStore()
-	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:    svc,
@@ -557,7 +557,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 func TestIntegrationExtensionFlow(t *testing.T) {
 	store := repository.NewMemoryStore()
 	repo := repository.NewServiceAdapter(store)
-	svc := service.NewService(repo, 5*time.Minute)
+	svc := service.NewService(repo, 5*time.Minute, service.RealClock{})
 
 	s := &server{
 		watchService:      svc,
@@ -687,7 +687,7 @@ func (s *stubProvider) ResolveProfile(ctx context.Context, r *http.Request) (ide
 // and /auth/twitch/callback routes with a stub identity provider.
 func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	store := repository.NewMemoryStore()
-	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute)
+	svc := service.NewService(repository.NewServiceAdapter(store), 5*time.Minute, service.RealClock{})
 
 	provider := &stubProvider{
 		resolvedUserID: "twitch-login-user",

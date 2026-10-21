@@ -59,7 +59,7 @@ func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 	defer r.mu.RUnlock()
 
 	if limit <= 0 {
-		limit = 20
+		limit = len(r.items)
 	}
 
 	states := make([]UserWatchState, 0, len(r.items))
@@ -85,13 +85,14 @@ func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 	return states[start:end]
 }
 
-func (r *MemoryRepository) DeleteUserWatchState(userID string) {
+func (r *MemoryRepository) DeleteUserWatchState(userID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.items, userID)
+	return nil
 }
 
-func (r *MemoryRepository) DeleteUserData(userID string) {
+func (r *MemoryRepository) DeleteUserData(userID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.items, userID)
@@ -101,6 +102,7 @@ func (r *MemoryRepository) DeleteUserData(userID string) {
 			delete(r.subscriptions, key)
 		}
 	}
+	return nil
 }
 
 // CountActiveWatchStates returns the number of stored states last updated at
@@ -185,10 +187,11 @@ func (r *MemoryRepository) SetSubscriptionStatus(subscriberID, publisherID strin
 	return nil
 }
 
-func (r *MemoryRepository) DeleteSubscription(subscriberID, publisherID string) {
+func (r *MemoryRepository) DeleteSubscription(subscriberID, publisherID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.subscriptions, subscriptionKey(subscriberID, publisherID))
+	return nil
 }
 
 // CountSubscriptionsByStatus tallies every stored subscription by status.

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -153,7 +152,7 @@ func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
 // List retrieves the most recent user watch states up to the limit.
 func (ps *PostgresStore) List(limit, offset int) []service.UserWatchState {
 	if limit <= 0 {
-		limit = 20
+		limit = 1000000
 	}
 
 	query := `
@@ -223,16 +222,24 @@ func (ps *PostgresStore) Delete(userID string) error {
 }
 
 // DeleteUserData removes all data associated with a user.
-func (ps *PostgresStore) DeleteUserData(userID string) {
-	if _, err := ps.db.Exec(`DELETE FROM user_watch_state WHERE user_id = $1`, userID); err != nil {
-		slog.Warn("failed to delete watch state", "user_id", userID, "error", err)
+func (ps *PostgresStore) DeleteUserData(userID string) error {
+	tx, err := ps.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	if _, err := ps.db.Exec(`DELETE FROM publisher_settings WHERE user_id = $1`, userID); err != nil {
-		slog.Warn("failed to delete publisher settings", "user_id", userID, "error", err)
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM user_watch_state WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("failed to delete watch state: %w", err)
 	}
-	if _, err := ps.db.Exec(`DELETE FROM subscriptions WHERE subscriber_id = $1 OR publisher_id = $1`, userID); err != nil {
-		slog.Warn("failed to delete subscriptions", "user_id", userID, "error", err)
+	if _, err := tx.Exec(`DELETE FROM publisher_settings WHERE user_id = $1`, userID); err != nil {
+		return fmt.Errorf("failed to delete publisher settings: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM subscriptions WHERE subscriber_id = $1 OR publisher_id = $1`, userID); err != nil {
+		return fmt.Errorf("failed to delete subscriptions: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // SetPublisherSettings inserts or updates a publisher's settings.

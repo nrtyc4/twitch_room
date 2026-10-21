@@ -45,7 +45,7 @@ func TestMemoryStoreList(t *testing.T) {
 		t.Fatalf("expected user-2 to be upserted: %v", err2)
 	}
 
-	states := store.List(10)
+	states := store.List(10, 0)
 	if len(states) != 2 {
 		t.Fatalf("expected 2 states, got %d", len(states))
 	}

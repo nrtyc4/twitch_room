@@ -51,6 +51,8 @@ func (m *Middleware) UserID(r *http.Request) (string, error) {
 				return headerUserID(r)
 			}
 		}
+		// If a token is expected but not provided or incorrect, do not fall through to dev auth
+		return "", ErrUnauthorized
 	}
 
 	if m.AllowDevAuth {

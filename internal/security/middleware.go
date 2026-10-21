@@ -69,6 +69,10 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 	matchers := make([]originMatcher, 0, len(allowedOrigins))
 	for _, o := range allowedOrigins {
 		if strings.Contains(o, "*") {
+			// Prevent wildcard origins from being used with credentials
+			if o == "*" {
+				continue
+			}
 			pattern := regexp.QuoteMeta(o)
 			pattern = strings.ReplaceAll(pattern, "\\*", ".*")
 			re, err := regexp.Compile("^" + pattern + "$")

@@ -108,7 +108,7 @@ func (s *MemoryStore) List(limit, offset int) []service.UserWatchState {
 	defer s.mu.RUnlock()
 
 	if limit <= 0 {
-		limit = 20
+		limit = len(s.items)
 	}
 	if offset < 0 {
 		offset = 0

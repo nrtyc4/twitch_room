@@ -83,7 +83,7 @@ func TestSessionCookieNotSecureByDefaultOverPlainHTTP(t *testing.T) {
 
 func TestWatchRejectsInvalidStreamID(t *testing.T) {
 	s := &server{
-		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
 		authMiddleware: &auth.Middleware{AllowDevAuth: true},
 		rateLimiter:    security.NewRateLimiter(30, time.Minute),
 	}
@@ -113,7 +113,7 @@ func TestWatchRejectsInvalidStreamID(t *testing.T) {
 
 func TestRequireUserRejectsMalformedIDs(t *testing.T) {
 	s := &server{
-		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
 		authMiddleware: &auth.Middleware{AllowDevAuth: true},
 		rateLimiter:    security.NewRateLimiter(30, time.Minute),
 	}
@@ -137,7 +137,7 @@ func TestRequireUserRejectsMalformedIDs(t *testing.T) {
 
 func TestUserPathRejectsMalformedID(t *testing.T) {
 	s := &server{
-		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute),
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
 		authMiddleware: &auth.Middleware{AllowDevAuth: true},
 	}
 
@@ -197,6 +197,7 @@ func newShareServer() (*server, *httptest.Server) {
 		service.NewMemoryRepository(),
 		time.Minute,
 		&fakeShareEnricher{},
+		service.RealClock{},
 	)
 	s := &server{
 		watchService:   svc,
@@ -365,6 +366,7 @@ func newMetricsServer(middleware *auth.Middleware) (*server, *httptest.Server) {
 		service.NewMemoryRepository(),
 		time.Minute,
 		&fakeShareEnricher{},
+		service.RealClock{},
 	)
 	_, _ = svc.SetUserWatchState("shroud", []string{"xqc"})
 	_, _ = svc.Subscribe("viewer", "shroud")
@@ -470,6 +472,7 @@ func TestSettingsWritesRateLimitedPerUser(t *testing.T) {
 		service.NewMemoryRepository(),
 		time.Minute,
 		&fakeShareEnricher{},
+		service.RealClock{},
 	)
 	s := &server{
 		watchService:    svc,

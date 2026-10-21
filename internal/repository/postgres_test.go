@@ -82,7 +82,7 @@ func TestPostgresWatchStateRoundTrip(t *testing.T) {
 		t.Fatalf("expected enriched stream round-trip, got %+v", s)
 	}
 
-	if listed := ps.List(10); len(listed) == 0 {
+	if listed := ps.List(10, 0); len(listed) == 0 {
 		t.Fatal("expected List to include the state")
 	}
 
