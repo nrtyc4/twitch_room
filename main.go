@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,6 +54,7 @@ type server struct {
 	apiAuthLimiter     *security.RateLimiter
 	watchStateCache    *performance.WatchStateCache
 	oauthStates        *oauthStateStore
+	oauthStateSecret   []byte
 	sessions           *sessionStore
 	redirectAfterLogin string
 	trustedProxyCIDRs  []netip.Prefix
@@ -333,7 +337,22 @@ func main() {
 		}()
 	}
 
+	// Signing key for stateless OAuth state values. Shared across instances
+	// via OAUTH_STATE_SECRET (or the static API token as a fallback); dev
+	// deployments with neither get an ephemeral process-local key.
+	oauthStateSecret := []byte(os.Getenv("OAUTH_STATE_SECRET"))
+	if len(oauthStateSecret) == 0 {
+		oauthStateSecret = []byte(sec.AuthToken)
+	}
+	if len(oauthStateSecret) == 0 {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err == nil {
+			oauthStateSecret = b
+		}
+	}
+
 	s := &server{
+		oauthStateSecret:   oauthStateSecret,
 		watchService:       svc,
 		authMiddleware:     &auth.Middleware{ExpectedToken: sec.AuthToken, AllowDevAuth: cfg.AllowDevAuth},
 		identityProvider:   identityProvider,
@@ -550,6 +569,8 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, gerr := s.watchService.GetUserWatchState(userID)
+	existed := gerr == nil
 	state, err := s.watchService.SetUserWatchStateContext(r.Context(), userID, payload.StreamIDs)
 	if err != nil {
 		slog.Error("failed to set watch state", "user_id", userID, "error", err)
@@ -572,7 +593,11 @@ func (s *server) handleWatch(w http.ResponseWriter, r *http.Request) {
 	// Invalidate cache on write
 	s.watchStateCache.Invalidate(userID)
 
-	writeJSON(w, http.StatusCreated, state)
+	status := http.StatusCreated
+	if existed {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, state)
 }
 
 func (s *server) handleUserWatch(w http.ResponseWriter, r *http.Request) {
@@ -846,16 +871,12 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Always mint the state server-side; never trust a caller-supplied value,
-	// otherwise an attacker can pre-generate a state and replay it.
-	state := randomState()
-	if state == "" {
+	// Mint a signed, short-lived state. It is bound to this browser via the
+	// cookie below, so it can be verified on any instance sharing the secret.
+	state, err := mintOAuthState(s.oauthStateSecret)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not generate state"})
 		return
-	}
-
-	if s.oauthStates != nil {
-		s.oauthStates.Put(state)
 	}
 
 	// Bind the state to this browser so it cannot be replayed cross-session.
@@ -911,7 +932,7 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
-	if s.oauthStates != nil && !s.oauthStates.Verify(state) {
+	if !verifyOAuthState(s.oauthStateSecret, state) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or missing state"})
 		return
 	}
@@ -1234,6 +1255,46 @@ func randomState() string {
 		return ""
 	}
 	return hex.EncodeToString(b)
+}
+
+// mintOAuthState creates a signed, expiring state value that can be verified
+// by any instance sharing the secret.
+func mintOAuthState(key []byte) (string, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	exp := time.Now().Add(10 * time.Minute).Unix()
+	nonceB64 := base64.RawURLEncoding.EncodeToString(nonce)
+	expStr := strconv.FormatInt(exp, 10)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(nonceB64 + "." + expStr))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return nonceB64 + "." + expStr + "." + sig, nil
+}
+
+func verifyOAuthState(key []byte, state string) bool {
+	parts := strings.Split(state, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	nonceB64, expStr, sigB64 := parts[0], parts[1], parts[2]
+	nonce, err := base64.RawURLEncoding.DecodeString(nonceB64)
+	if err != nil || len(nonce) != 16 {
+		return false
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(sigB64)
+	if err != nil {
+		return false
+	}
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(nonceB64 + "." + expStr))
+	expected := mac.Sum(nil)
+	return hmac.Equal(sig, expected)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

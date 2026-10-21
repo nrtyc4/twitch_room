@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -72,6 +73,13 @@ func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 		})
 	}
 
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].UpdatedAt.After(states[j].UpdatedAt)
+	})
+
+	if offset < 0 {
+		offset = 0
+	}
 	start := offset
 	if start > len(states) {
 		return []UserWatchState{}

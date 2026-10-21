@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -84,14 +85,18 @@ func (ps *PostgresStore) initSchema(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
 	ALTER TABLE user_watch_state ADD COLUMN IF NOT EXISTS streams JSONB;
+	ALTER TABLE user_watch_state ALTER COLUMN streams SET DEFAULT '[]'::jsonb;
 	ALTER TABLE sessions ADD COLUMN IF NOT EXISTS access_token TEXT NOT NULL DEFAULT '';
 	`
 
 	if _, err := ps.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}
-	_, err := ps.db.ExecContext(ctx, `UPDATE user_watch_state SET streams = '[]'::jsonb WHERE streams IS NULL`)
-	return err
+	if _, err := ps.db.ExecContext(ctx, `UPDATE user_watch_state SET streams = '[]'::jsonb WHERE streams IS NULL`); err != nil {
+		return err
+	}
+	_, _ = ps.db.ExecContext(ctx, `ALTER TABLE user_watch_state ALTER COLUMN streams SET NOT NULL`)
+	return nil
 }
 
 // Upsert inserts or updates a user's watch state.
@@ -142,7 +147,7 @@ func (ps *PostgresStore) Get(userID string) (service.UserWatchState, bool) {
 		if err == sql.ErrNoRows {
 			return service.UserWatchState{}, false
 		}
-		// Log error but return false for consistency
+		slog.Warn("postgres Get failed", "user_id", userID, "error", err)
 		return service.UserWatchState{}, false
 	}
 
@@ -154,6 +159,9 @@ func (ps *PostgresStore) List(limit, offset int) []service.UserWatchState {
 	if limit <= 0 {
 		limit = 1000000
 	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	query := `
 	SELECT user_id, stream_ids, streams, updated_at
@@ -164,6 +172,7 @@ func (ps *PostgresStore) List(limit, offset int) []service.UserWatchState {
 
 	rows, err := ps.db.Query(query, limit, offset)
 	if err != nil {
+		slog.Warn("postgres List failed", "error", err)
 		return []service.UserWatchState{}
 	}
 	defer rows.Close()
@@ -277,6 +286,9 @@ func (ps *PostgresStore) GetPublisherSettings(userID string) (service.PublisherS
 		Scan(&settings.UserID, &settings.SubscriptionMode, &settings.Visibility)
 
 	if err != nil {
+		if err != sql.ErrNoRows {
+			slog.Warn("postgres GetPublisherSettings failed", "user_id", userID, "error", err)
+		}
 		return service.PublisherSettings{}, false
 	}
 	return settings, true
@@ -341,6 +353,7 @@ func (ps *PostgresStore) CountActiveWatchStates(updatedAfter time.Time) int {
 	const query = `SELECT COUNT(*) FROM user_watch_state WHERE updated_at >= $1`
 	var count int
 	if err := ps.db.QueryRow(query, updatedAfter).Scan(&count); err != nil {
+		slog.Warn("postgres CountActiveWatchStates failed", "error", err)
 		return 0
 	}
 	return count
@@ -351,6 +364,7 @@ func (ps *PostgresStore) CountSubscriptionsByStatus() map[service.SubscriptionSt
 	const query = `SELECT status, COUNT(*) FROM subscriptions GROUP BY status`
 	rows, err := ps.db.Query(query)
 	if err != nil {
+		slog.Warn("postgres CountSubscriptionsByStatus failed", "error", err)
 		return map[service.SubscriptionStatus]int{}
 	}
 	defer rows.Close()
@@ -393,6 +407,7 @@ func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) er
 func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) []service.Subscription {
 	rows, err := ps.db.Query(query, args...)
 	if err != nil {
+		slog.Warn("postgres querySubscriptions failed", "error", err)
 		return []service.Subscription{}
 	}
 	defer rows.Close()

@@ -40,7 +40,13 @@ func (c *WatchStateCache) Get(userID string) (service.UserWatchState, bool) {
 	}
 
 	// Check if entry has expired
-	if time.Now().After(entry.ExpiresAt) {
+	now := time.Now()
+	if now.After(entry.ExpiresAt) {
+		return service.UserWatchState{}, false
+	}
+	// Also honor the watch state's own TTL so a state that was already
+	// close to expiry when cached is not served past its lifetime.
+	if !entry.Data.UpdatedAt.IsZero() && now.Sub(entry.Data.UpdatedAt) > c.ttl {
 		return service.UserWatchState{}, false
 	}
 

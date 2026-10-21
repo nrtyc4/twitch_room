@@ -182,6 +182,12 @@ async function fetchFeed() {
     }
   });
 
+  if (response.status === 401) {
+    throw new Error('Session expired. Please log in again.');
+  }
+  if (response.status === 401) {
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
@@ -207,6 +213,12 @@ async function getUserInfo() {
     }
   });
 
+  if (response.status === 401) {
+    throw new Error('Session expired. Please log in again.');
+  }
+  if (response.status === 401) {
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
@@ -247,6 +259,9 @@ async function syncWithBackend(channelName, userId) {
     body: JSON.stringify({ stream_ids: [channelName] })
   });
 
+  if (response.status === 401) {
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }

@@ -223,3 +223,9 @@ The codebase follows a few conventions to stay memory-efficient and idiomatic Go
 TEST_DATABASE_DSN="postgres://twitch_room:twitch_room@localhost:5432/twitch_room?sslmode=disable" \
   go test ./internal/repository/ -run Postgres -v
 ```
+
+## Limitations
+
+- Rate limiters, the watch-state cache, and (in dev) OAuth states are per-process. Run a single instance, or front multiple instances with a shared cache/rate-limit store, for consistent limits.
+- The service stores Twitch user access tokens only when follow-based suggestions are enabled; the default build does not request `user:read:follows`.
+- `POST /auth/logout` ends the session only; use `DELETE /v1/account` to purge all stored data.

@@ -1,10 +1,16 @@
 services:
   twitch-room:
     environment:
+      APP_ENV: "production"
       ALLOW_DEV_AUTH: "false"
-      TWITCH_ROOM_AUTH_TOKEN: "prod-secret-token"
+      TWITCH_ROOM_AUTH_TOKEN: "${TWITCH_ROOM_AUTH_TOKEN:?set TWITCH_ROOM_AUTH_TOKEN}"
+      DATABASE_DSN: "${DATABASE_DSN:?set DATABASE_DSN}"
+      TLS_ENABLED: "${TLS_ENABLED:-false}"
+      TLS_CERT_FILE: "${TLS_CERT_FILE:-}"
+      TLS_KEY_FILE: "${TLS_KEY_FILE:-}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
 
   prometheus:
     environment:
       # Must match the service token above, or scrapes get 401.
-      TWITCH_ROOM_AUTH_TOKEN: "prod-secret-token"
+      TWITCH_ROOM_AUTH_TOKEN: "${TWITCH_ROOM_AUTH_TOKEN:?set TWITCH_ROOM_AUTH_TOKEN}"

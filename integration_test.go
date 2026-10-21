@@ -253,7 +253,7 @@ func TestIntegrationRateLimitingEnforcement(t *testing.T) {
 
 		resp, _ := http.DefaultClient.Do(req)
 
-		if resp.StatusCode == http.StatusCreated {
+		if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
 			successCount++
 		} else if resp.StatusCode == http.StatusTooManyRequests {
 			limitedCount++

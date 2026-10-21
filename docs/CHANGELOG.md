@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-10-21
+
+### Changed
+- **Auth:** OAuth state is now signed and bound to the browser, so logins work across instances/restarts.
+- **API:** `POST /v1/watch` returns 200 on update, 201 on first creation; added `DELETE /v1/account`.
+- **Logout:** no longer purges account data; explicit delete endpoint added.
+- **Refresh:** Helix lookups chunked at 100; refresh pages states in batches.
+- **Extension:** feed rendered without `innerHTML`; clearer expired-session errors.
+- **Ops:** Docker image runs as non-root with healthcheck; toolchain aligned to Go 1.26.
+
 ## [Unreleased] - 2026-10-19
 
 ### Added
