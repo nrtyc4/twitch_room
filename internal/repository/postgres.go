@@ -212,6 +212,16 @@ func buildWatchState(userID string, streamIDsResult pq.StringArray, streamsResul
 	return state
 }
 
+// DeleteExpired removes watch states last updated before the given time.
+func (ps *PostgresStore) DeleteExpired(updatedBefore time.Time) int {
+	result, err := ps.db.Exec(`DELETE FROM user_watch_state WHERE updated_at < $1`, updatedBefore)
+	if err != nil {
+		return 0
+	}
+	n, _ := result.RowsAffected()
+	return int(n)
+}
+
 // Delete removes a user's watch state.
 func (ps *PostgresStore) Delete(userID string) error {
 	query := `DELETE FROM user_watch_state WHERE user_id = $1`

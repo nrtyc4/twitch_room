@@ -144,39 +144,78 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function loadFeed() {
     chrome.runtime.sendMessage({ type: 'GET_FEED' }, (response) => {
       if (chrome.runtime.lastError) {
-        feedContainer.innerHTML = '<p class="feed-empty-msg">Error loading feed.</p>';
+        const errP = document.createElement('p');
+        errP.className = 'feed-empty-msg';
+        errP.textContent = 'Error loading feed.';
+        feedContainer.replaceChildren(errP);
         return;
       }
       if (response && response.status === 'success' && Array.isArray(response.data)) {
         const entries = response.data;
         if (entries.length === 0) {
-          feedContainer.innerHTML = '<p class="feed-empty-msg">No friends active yet. Share your link!</p>';
+          const empty = document.createElement('p');
+          empty.className = 'feed-empty-msg';
+          empty.textContent = 'No friends active yet. Share your link!';
+          feedContainer.replaceChildren(empty);
           return;
         }
-        feedContainer.innerHTML = '';
+        feedContainer.replaceChildren();
         entries.forEach(entry => {
           const item = document.createElement('div');
           item.className = 'feed-item';
           if (entry.streams && entry.streams.length > 0) {
-            item.onclick = () => window.open(`https://www.twitch.tv/${entry.streams[0].id}`, '_blank');
+            item.addEventListener('click', () => window.open(`https://www.twitch.tv/${encodeURIComponent(entry.streams[0].id)}`, '_blank'));
           }
-          const avatarUrl = entry.avatar_url || 'https://www.twitch.tv/favicon.ico';
-          let activityHTML = '<div class="feed-activity">is offline</div>';
+
+          const avatar = document.createElement('img');
+          avatar.className = 'feed-avatar';
+          avatar.alt = entry.display_name || '';
+          const rawAvatar = entry.avatar_url || '';
+          avatar.src = /^https:\/\/(static-cdn\.jtvnw\.net|[^/]*\.twitch\.tv)\//.test(rawAvatar)
+            ? rawAvatar
+            : 'https://www.twitch.tv/favicon.ico';
+
+          const content = document.createElement('div');
+          content.className = 'feed-content';
+
+          const userInfo = document.createElement('div');
+          userInfo.className = 'feed-user-info';
+          const userName = document.createElement('span');
+          userName.className = 'feed-user-name';
+          userName.textContent = entry.display_name || '';
+          userInfo.appendChild(userName);
+
+          const activity = document.createElement('div');
+          activity.className = 'feed-activity';
           if (entry.streams && entry.streams.length > 0) {
+            const group = document.createElement('div');
+            group.className = 'feed-activity-group';
+            const watching = document.createElement('div');
+            watching.className = 'feed-activity';
+            watching.textContent = 'is watching';
+            group.appendChild(watching);
             const s = entry.streams[0];
-            const title = s.title ? `<div class="feed-stream-meta">${s.title}</div>` : '';
-            const game = s.game_name ? `<div class="feed-stream-meta">${s.game_name}</div>` : '';
-            activityHTML = `<div class="feed-activity-group"><div class="feed-activity">is watching</div>${title}${game}</div>`;
+            if (s.title) {
+              const t = document.createElement('div');
+              t.className = 'feed-stream-meta';
+              t.textContent = s.title;
+              group.appendChild(t);
+            }
+            if (s.game_name) {
+              const g = document.createElement('div');
+              g.className = 'feed-stream-meta';
+              g.textContent = s.game_name;
+              group.appendChild(g);
+            }
+            activity.replaceWith(group);
+          } else {
+            activity.textContent = 'is offline';
           }
-          item.innerHTML = `
-            <img src="${avatarUrl}" class="feed-avatar" alt="${entry.display_name || ''}">
-            <div class="feed-content">
-              <div class="feed-user-info">
-                <span class="feed-user-name">${entry.display_name || ''}</span>
-              </div>
-              ${activityHTML}
-            </div>
-          `;
+
+          content.appendChild(userInfo);
+          content.appendChild(activity);
+          item.appendChild(avatar);
+          item.appendChild(content);
           feedContainer.appendChild(item);
         });
       } else {

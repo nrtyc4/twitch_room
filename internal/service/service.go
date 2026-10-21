@@ -137,6 +137,7 @@ type Repository interface {
 	ListActiveUsers(limit, offset int) []UserWatchState
 	DeleteUserWatchState(userID string) error
 	DeleteUserData(userID string) error
+	DeleteExpiredWatchStates(updatedBefore time.Time) int
 	CountActiveWatchStates(updatedAfter time.Time) int
 
 	SetPublisherSettings(settings PublisherSettings) error
@@ -154,28 +155,21 @@ type Repository interface {
 // Clock provides a way to inject time for testing purposes.
 
 type Clock interface {
-
 	Now() time.Time
-
 }
 
 type RealClock struct{}
 
-
 func (RealClock) Now() time.Time { return time.Now().UTC() }
 
-
-
 type Service struct {
-
-	repo      Repository
+	repo Repository
 
 	actionTTL time.Duration
 
-	enricher  StreamEnricher
+	enricher StreamEnricher
 
-	clock     Clock
-
+	clock Clock
 }
 
 func NewService(repo Repository, actionTTL time.Duration, clock Clock) *Service {
@@ -291,59 +285,51 @@ func (s *Service) resolveStreams(ctx context.Context, logins []string, now time.
 // stored updated_at is preserved. Without an enricher only expired states are
 // removed and no metadata changes are made.
 func (s *Service) RefreshWatchStates(ctx context.Context) ([]string, error) {
-	states := s.repo.ListActiveUsers(0, 0)
-	if len(states) == 0 {
+	// Drop expired states up front so paging below is stable.
+	s.repo.DeleteExpiredWatchStates(s.clock.Now().Add(-s.actionTTL))
+
+	if s.enricher == nil {
 		return nil, nil
 	}
 
+	const batchSize = 200
 	var allRefreshed []string
-	deletedInThisBatch := false
-	live := make([]UserWatchState, 0, len(states))
-	for _, state := range states {
-		if s.isExpired(state.UpdatedAt) {
-			s.repo.DeleteUserWatchState(state.UserID)
-			deletedInThisBatch = true
-			continue
+	offset := 0
+	for {
+		states := s.repo.ListActiveUsers(batchSize, offset)
+		if len(states) == 0 {
+			break
 		}
-		live = append(live, state)
-	}
 
-	if deletedInThisBatch {
-		// If we deleted some, we might need to re-process if we want to be thorough,
-		// but for simplicity, we just continue with the live ones.
-	}
-
-	if len(live) == 0 {
-		return allRefreshed, nil
-	}
-
-	if s.enricher == nil {
-		return allRefreshed, nil
-	}
-
-	logins := make([]string, 0, len(live))
-	for _, state := range live {
-		for _, id := range watchLogins(state) {
-			logins = append(logins, id)
+		logins := make([]string, 0, len(states))
+		for _, state := range states {
+			for _, id := range watchLogins(state) {
+				logins = append(logins, id)
+			}
 		}
-	}
-	logins = normalizeStreamIDs(logins)
+		logins = normalizeStreamIDs(logins)
 
-	info, err := s.enricher.LookupStreams(ctx, logins)
-	if err != nil {
-		return allRefreshed, err
-	}
+		info, err := s.enricher.LookupStreams(ctx, logins)
+		if err != nil {
+			return allRefreshed, err
+		}
 
-	for _, state := range live {
-		streams := refreshStreams(state, info)
-		if equalStreams(state.Streams, streams) {
-			continue
+		for _, state := range states {
+			streams := refreshStreams(state, info)
+			if equalStreams(state.Streams, streams) {
+				continue
+			}
+			if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
+				slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
+				continue
+			}
+			allRefreshed = append(allRefreshed, state.UserID)
 		}
-		if _, err := s.repo.UpsertUserWatchState(state.UserID, streams, state.UpdatedAt); err != nil {
-			slog.Error("failed to refresh user watch state", "user_id", state.UserID, "error", err)
-			continue
+
+		if len(states) < batchSize {
+			break
 		}
-		allRefreshed = append(allRefreshed, state.UserID)
+		offset += batchSize
 	}
 
 	return allRefreshed, nil

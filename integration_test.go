@@ -721,7 +721,7 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	}}
 
 	// Test 1: Login redirects with a 302 to the Twitch authorize URL.
-	loginReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch?state=test-state", nil)
+	loginReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch", nil)
 	loginResp, err := client.Do(loginReq)
 	if err != nil {
 		t.Fatalf("login request failed: %v", err)
@@ -734,9 +734,23 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 		t.Fatalf("expected redirect to Twitch authorize URL, got %q", loc)
 	}
 
+	// The login must bind a state to this browser via a cookie.
+	var oauthStateCookie *http.Cookie
+	for _, c := range loginResp.Cookies() {
+		if c.Name == oauthStateCookieName {
+			oauthStateCookie = c
+			break
+		}
+	}
+	if oauthStateCookie == nil || oauthStateCookie.Value == "" {
+		t.Fatal("expected an oauth state cookie to be set on login")
+	}
+	loginResp.Body.Close()
+
 	// Test 2: Callback with the issued state and a code resolves the user,
 	// sets a session cookie, and redirects the browser into the app.
-	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state=test-state&code=abc123", nil)
+	callbackReq, _ := http.NewRequest("GET", testServer.URL+"/auth/twitch/callback?state="+oauthStateCookie.Value+"&code=abc123", nil)
+	callbackReq.AddCookie(oauthStateCookie)
 	callbackResp, err := client.Do(callbackReq)
 	if err != nil {
 		t.Fatalf("callback request failed: %v", err)

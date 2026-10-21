@@ -158,7 +158,8 @@ The API authenticates with the `X-User-ID` header (dev auth) or automatically vi
 - `GET /auth/twitch`
 - `GET /auth/twitch/callback`
 - `GET /auth/me` — report the current session user
-- `POST /auth/logout` — destroy the session
+- `POST /auth/logout` — destroy the session (does not delete account data)
+- `DELETE /v1/account` — purge all data for the authenticated user (watch state, settings, subscriptions, sessions)
 
 ### Input strictness
 

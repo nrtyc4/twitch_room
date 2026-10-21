@@ -158,6 +158,31 @@ func TestUserPathRejectsMalformedID(t *testing.T) {
 	}
 }
 
+func TestRequireUserStaticTokenRejectsHeaderOnly(t *testing.T) {
+	s := &server{
+		watchService:   service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
+		authMiddleware: &auth.Middleware{ExpectedToken: "secret", AllowDevAuth: true},
+		rateLimiter:    security.NewRateLimiter(30, time.Minute),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, testServer.URL+"/v1/watch", bytes.NewBufferString(`{"stream_ids":["xqc"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(auth.HeaderUserID, "victim")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 with static token configured, got %d", resp.StatusCode)
+	}
+}
+
 func truncate(s string) string {
 	if len(s) > 400 {
 		return s[:400] + "..."

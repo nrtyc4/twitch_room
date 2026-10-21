@@ -72,24 +72,39 @@ func (c *Client) LookupStreams(ctx context.Context, logins []string) (map[string
 		result[login] = service.StreamInfo{}
 	}
 
-	users, err := c.fetchUsers(ctx, unique)
-	if err != nil {
-		return nil, err
-	}
-	for _, u := range users {
-		info := service.StreamInfo{
-			Exists:      true,
-			ChannelName: u.DisplayName,
+	// Helix caps filter parameters at 100 per request, so chunk the lookups.
+	for i := 0; i < len(unique); i += usersChunkSize {
+		end := i + usersChunkSize
+		if end > len(unique) {
+			end = len(unique)
 		}
-		result[strings.ToLower(u.Login)] = info
+		chunk := unique[i:end]
+		users, err := c.fetchUsers(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			info := service.StreamInfo{
+				Exists:      true,
+				ChannelName: u.DisplayName,
+			}
+			result[strings.ToLower(u.Login)] = info
+		}
 	}
 
 	// Live metadata is best-effort: a failure degrades to channel existence
 	// only rather than failing the whole publish.
 	liveByLogin := map[string]helixStream{}
-	if streams, err := c.fetchStreams(ctx, unique); err == nil {
-		for _, st := range streams {
-			liveByLogin[strings.ToLower(st.UserLogin)] = st
+	for i := 0; i < len(unique); i += usersChunkSize {
+		end := i + usersChunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[i:end]
+		if streams, err := c.fetchStreams(ctx, chunk); err == nil {
+			for _, st := range streams {
+				liveByLogin[strings.ToLower(st.UserLogin)] = st
+			}
 		}
 	}
 

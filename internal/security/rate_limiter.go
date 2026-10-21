@@ -55,11 +55,7 @@ func (rl *RateLimiter) Allow(key string) bool {
 		return false
 	}
 	filtered = append(filtered, now)
-	if len(filtered) == 0 {
-		delete(rl.requests, key)
-	} else {
-		rl.requests[key] = filtered
-	}
+	rl.requests[key] = filtered
 	return true
 }
 

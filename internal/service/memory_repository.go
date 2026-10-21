@@ -85,6 +85,19 @@ func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 	return states[start:end]
 }
 
+func (r *MemoryRepository) DeleteExpiredWatchStates(updatedBefore time.Time) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := 0
+	for id, state := range r.items {
+		if state.UpdatedAt.Before(updatedBefore) {
+			delete(r.items, id)
+			removed++
+		}
+	}
+	return removed
+}
+
 func (r *MemoryRepository) DeleteUserWatchState(userID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

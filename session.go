@@ -25,6 +25,7 @@ type sessionBackend interface {
 	userID(token string) (string, bool)
 	accessToken(token string) (string, bool)
 	destroy(token string)
+	destroyUser(userID string)
 }
 
 // sessionStore issues opaque session tokens after a successful Twitch OAuth
@@ -122,6 +123,16 @@ func (b *memorySessionBackend) destroy(token string) {
 	delete(b.tokens, token)
 }
 
+func (b *memorySessionBackend) destroyUser(userID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for token, entry := range b.tokens {
+		if entry.userID == userID {
+			delete(b.tokens, token)
+		}
+	}
+}
+
 // Cleanup removes expired sessions and returns how many were removed.
 func (b *memorySessionBackend) Cleanup() int {
 	b.mu.Lock()
@@ -158,6 +169,10 @@ func (b postgresSessionBackend) destroy(token string) {
 	b.store.DeleteSession(token)
 }
 
+func (b postgresSessionBackend) destroyUser(userID string) {
+	b.store.DeleteSessionsForUser(userID)
+}
+
 func (s *sessionStore) create(userID, accessToken string) (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
@@ -187,6 +202,10 @@ func (s *sessionStore) accessTokenFromRequest(r *http.Request) (string, bool) {
 
 func (s *sessionStore) destroy(token string) {
 	s.backend.destroy(token)
+}
+
+func (s *sessionStore) destroyUserSessions(userID string) {
+	s.backend.destroyUser(userID)
 }
 
 // Cleanup removes expired sessions from the backing store.

@@ -22,12 +22,8 @@ func SecurityHeaders(enableHSTS bool, allowedOrigins []string) func(http.Handler
 
 			styleSrc := "style-src 'self'"
 			scriptSrc := "script-src 'self'"
-			// The public share page is a self-contained document that uses
-			// inline styles and a small inline script; allow them there only.
-			if strings.HasPrefix(r.URL.Path, "/u/") {
-				styleSrc = "style-src 'self' 'unsafe-inline'"
-				scriptSrc = "script-src 'self' 'unsafe-inline'"
-			}
+			// The share page sets its own (stricter) CSP in share.go; nothing
+			// here needs an inline allowance.
 
 			directives := []string{
 				"default-src 'self'",
@@ -86,6 +82,7 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Origin")
 			origin := r.Header.Get("Origin")
 			if origin == "" {
 				next.ServeHTTP(w, r)
@@ -161,7 +158,7 @@ func ForceHTTPS(allowedHosts []string, isHTTPS func(r *http.Request) bool) func(
 			u := *r.URL
 			u.Scheme = "https"
 			u.Host = r.Host
-			http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
+			http.Redirect(w, r, u.String(), http.StatusPermanentRedirect)
 		})
 	}
 }

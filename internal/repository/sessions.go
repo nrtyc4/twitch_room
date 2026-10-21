@@ -71,6 +71,16 @@ func (ps *PostgresStore) DeleteSession(token string) {
 	}
 }
 
+// DeleteSessionsForUser removes every session bound to a user.
+func (ps *PostgresStore) DeleteSessionsForUser(userID string) {
+	if userID == "" {
+		return
+	}
+	if _, err := ps.db.Exec(`DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		slog.Warn("failed to delete sessions for user", "error", err)
+	}
+}
+
 // reapExpiredSessions removes expired session rows at most once a minute.
 func (ps *PostgresStore) reapExpiredSessions() {
 	ps.cleanupMu.Lock()

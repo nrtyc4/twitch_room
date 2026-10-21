@@ -57,6 +57,16 @@ type TwitchProvider struct {
 	appAccessToken string
 	appTokenExpiry time.Time
 	appTokenMu     sync.Mutex
+
+	// identityCache caches the result of validating a user access token so
+	// repeated API calls do not each hit Helix.
+	identityCache   map[string]cachedIdentity
+	identityCacheMu sync.Mutex
+}
+
+type cachedIdentity struct {
+	userID    string
+	fetchedAt time.Time
 }
 
 type twitchTokenResponse struct {
@@ -96,6 +106,7 @@ func NewTwitchProvider() *TwitchProvider {
 		ClientSecret:  os.Getenv("TWITCH_CLIENT_SECRET"),
 		RedirectURI:   os.Getenv("TWITCH_REDIRECT_URI"),
 		EnableDevAuth: os.Getenv("ALLOW_DEV_AUTH") == "true",
+		identityCache: make(map[string]cachedIdentity),
 		httpClient: &http.Client{
 			Timeout:   cfg.Timeout,
 			Transport: transport,
@@ -318,6 +329,14 @@ func (p *TwitchProvider) exchangeCodeForToken(ctx context.Context, code string) 
 
 // getUserIDFromToken fetches the user ID from Twitch using a valid access token.
 func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken string) (string, error) {
+	const ttl = 60 * time.Second
+	p.identityCacheMu.Lock()
+	if c, ok := p.identityCache[accessToken]; ok && time.Since(c.fetchedAt) < ttl {
+		p.identityCacheMu.Unlock()
+		return c.userID, nil
+	}
+	p.identityCacheMu.Unlock()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, TwitchUserInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create user info request: %w", err)
@@ -350,7 +369,11 @@ func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken str
 		return "", fmt.Errorf("%w: no user data in response", ErrInvalidIdentity)
 	}
 
-	return userResp.Data[0].Login, nil
+	login := userResp.Data[0].Login
+	p.identityCacheMu.Lock()
+	p.identityCache[accessToken] = cachedIdentity{userID: login, fetchedAt: time.Now()}
+	p.identityCacheMu.Unlock()
+	return login, nil
 }
 
 // ResolveIdentity resolves the caller identity, attaching the freshly issued

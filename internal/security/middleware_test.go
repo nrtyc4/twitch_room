@@ -128,8 +128,8 @@ func TestForceHTTPSRedirectsPlainHTTP(t *testing.T) {
 		t.Fatalf("handler reached over plain HTTP: %s", r.URL)
 	})).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusMovedPermanently {
-		t.Fatalf("expected 301, got %d", rec.Code)
+	if rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("expected 308, got %d", rec.Code)
 	}
 	loc := rec.Header().Get("Location")
 	if loc != "https://example.com/feed?x=1" {
@@ -205,8 +205,8 @@ func TestForceHTTPSRedirectsOnlyAllowedHosts(t *testing.T) {
 		t.Fatal("handler should not be reached")
 	})).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusMovedPermanently {
-		t.Fatalf("expected 301, got %d", rec.Code)
+	if rec.Code != http.StatusPermanentRedirect {
+		t.Fatalf("expected 308, got %d", rec.Code)
 	}
 	if loc := rec.Header().Get("Location"); loc != "https://app.example.com:443/feed" {
 		t.Fatalf("unexpected redirect location %q", loc)

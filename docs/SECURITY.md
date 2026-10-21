@@ -5,8 +5,11 @@
 ### Implementation
 The public share page (`/u/`) now utilizes a tailored Content Security Policy to allow necessary inline styles and scripts while preventing unauthorized execution.
 
-**Current Policy for `/u/` routes:**
-`default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv data:; connect-src 'self'`
+**Current Policy for `/u/` routes (set by `share.go`, overrides the middleware default):**
+`default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' https://static-cdn.jtvnw.net https://*.twitch.tv data:; connect-src 'self'`
+
+The middleware's `/u/` branch that allowed `'unsafe-inline'` has been removed; the share page loads its
+CSS/JS from `/extension/` and needs no inline allowance.
 
 ### Security Measures
 

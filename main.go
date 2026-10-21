@@ -48,6 +48,7 @@ type server struct {
 	suggestor          followedSuggestor
 	rateLimiter        *security.RateLimiter
 	authLimiter        *security.RateLimiter
+	apiAuthLimiter     *security.RateLimiter
 	watchStateCache    *performance.WatchStateCache
 	oauthStates        *oauthStateStore
 	sessions           *sessionStore
@@ -64,6 +65,11 @@ type server struct {
 type followedSuggestor interface {
 	FollowedLiveStreams(ctx context.Context, userAccessToken string) ([]twitchapi.FollowedStream, error)
 }
+
+// oauthStateCookieName binds the OAuth state to the browser that started the
+// flow, so a state value minted by an attacker cannot be replayed against a
+// victim's session.
+const oauthStateCookieName = "twitch_room_oauth_state"
 
 // oauthStateStore tracks pending OAuth state values for CSRF protection.
 type oauthStateStore struct {
@@ -134,6 +140,7 @@ func newRouter(s *server) (*http.ServeMux, error) {
 	mux.HandleFunc("/v1/users/", s.handleUserWatch)
 	mux.HandleFunc("/v1/feed", s.handleFeed)
 	mux.HandleFunc("/v1/settings", s.handleSettings)
+	mux.HandleFunc("/v1/account", s.handleDeleteUserData)
 	mux.HandleFunc("/v1/subscriptions", s.handleSubscriptions)
 	mux.HandleFunc("/v1/subscriptions/", s.handleSubscription)
 	mux.HandleFunc("/v1/subscription_requests", s.handleSubscriptionRequests)
@@ -196,6 +203,9 @@ func main() {
 	if cfg.AllowDevAuth && cfg.AppEnv == "production" {
 		slog.Error("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
 		os.Exit(1)
+	}
+	if cfg.AllowDevAuth && cfg.AppEnv == "" {
+		slog.Warn("ALLOW_DEV_AUTH is enabled without APP_ENV=production; the API will accept X-User-ID from any caller. Set APP_ENV=production (and disable dev auth) for real deployments")
 	}
 
 	// Stop serving gracefully when the process receives an interrupt or a
@@ -330,6 +340,7 @@ func main() {
 		suggestor:          suggestor,
 		rateLimiter:        security.NewRateLimiter(30, time.Minute),
 		authLimiter:        security.NewRateLimiter(20, time.Minute),
+		apiAuthLimiter:     security.NewRateLimiter(60, time.Minute),
 		shareLimiter:       security.NewRateLimiter(60, time.Minute),
 		settingsLimiter:    security.NewRateLimiter(10, time.Minute),
 		watchStateCache:    watchStateCache,
@@ -376,6 +387,7 @@ func main() {
 		isHTTPS := func(r *http.Request) bool { return security.HTTPSRequest(r, trusted(r)) }
 		handler = security.ForceHTTPS(cfg.AllowedHosts, isHTTPS)(handler)
 	}
+	handler = s.apiAuthMiddleware(handler)
 	handler = s.metricsMiddleware(handler)
 
 	srv := &http.Server{
@@ -834,14 +846,28 @@ func (s *server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state := r.URL.Query().Get("state")
+	// Always mint the state server-side; never trust a caller-supplied value,
+	// otherwise an attacker can pre-generate a state and replay it.
+	state := randomState()
 	if state == "" {
-		state = randomState()
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not generate state"})
+		return
 	}
 
 	if s.oauthStates != nil {
 		s.oauthStates.Put(state)
 	}
+
+	// Bind the state to this browser so it cannot be replayed cross-session.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookieName,
+		Value:    state,
+		Path:     "/auth",
+		HttpOnly: true,
+		Secure:   r.TLS != nil || (s.sessions != nil && s.sessions.secureCookies),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   900,
+	})
 
 	// user:read:follows lets us prefill the watch box with the channels the
 	// user follows that are live right now, so publishing is one click.
@@ -865,7 +891,27 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.oauthStates != nil && !s.oauthStates.Verify(r.URL.Query().Get("state")) {
+	state := r.URL.Query().Get("state")
+	cookieState := ""
+	if c, err := r.Cookie(oauthStateCookieName); err == nil {
+		cookieState = c.Value
+	}
+	// The state must be present, must match the value bound to this browser,
+	// and must be a single-use value issued by the server.
+	if state == "" || cookieState == "" || state != cookieState {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or missing state"})
+		return
+	}
+	// Clear the binding cookie now that it has been consumed.
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthStateCookieName,
+		Value:    "",
+		Path:     "/auth",
+		HttpOnly: true,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
+	if s.oauthStates != nil && !s.oauthStates.Verify(state) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or missing state"})
 		return
 	}
@@ -911,6 +957,10 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	if !s.rateLimitByIP(w, r) {
 		return
 	}
 
@@ -964,23 +1014,61 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Purge server-side data for the authenticated user on logout (Twitch
-	// Developer Agreement VI.F: delete data on revocation/un-auth).
-	if userID, ok := s.requireUser(r); ok {
-		if err := s.watchService.DeleteUser(userID); err != nil {
-			slog.Warn("failed to purge user data on logout", "user_id", userID, "error", err)
-		}
-		s.watchStateCache.Invalidate(userID)
-	}
-
+	// Logout only ends the session. Account data is removed via the explicit
+	// DELETE /v1/account endpoint so a routine logout is not destructive.
 	if s.sessions != nil {
 		s.sessions.destroySessionCookie(w, r)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// apiAuthMiddleware applies a coarse IP-based rate limit to all /v1 routes
+// before identity resolution, so unauthenticated (or bogus-token) requests
+// cannot force outbound Twitch calls without being throttled.
+func (s *server) apiAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") && s.apiAuthLimiter != nil {
+			if !s.apiAuthLimiter.Allow(security.ClientIP(r, s.trustedRequest(r))) {
+				s.incThrottled("api_auth_ip")
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // trustedRequest reports whether the request came from a proxy network we
 // trust to supply X-Forwarded-* headers.
+// handleDeleteUserData purges all stored data for the authenticated user and
+// invalidates every session bound to them. This is the explicit "delete my
+// data" action, distinct from a routine logout.
+func (s *server) handleDeleteUserData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	userID, ok := s.requireUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	if err := s.watchService.DeleteUser(userID); err != nil {
+		slog.Warn("failed to purge user data", "user_id", userID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user data"})
+		return
+	}
+	s.watchStateCache.Invalidate(userID)
+	if s.sessions != nil {
+		s.sessions.destroyUserSessions(userID)
+		s.sessions.destroySessionCookie(w, r)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) trustedRequest(r *http.Request) bool {
 	return security.TrustedRequest(r, s.trustedProxyCIDRs)
 }
@@ -1018,6 +1106,13 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 	userID, err := s.authMiddleware.UserID(r)
 	if err == nil {
 		return userID, true
+	}
+
+	// When a static API token is configured, an authenticated request must
+	// have carried it; do not let the identity provider's dev-auth fallback
+	// (X-User-ID without a token) impersonate a user in that case.
+	if s.authMiddleware.ExpectedToken != "" {
+		return "", false
 	}
 
 	// Fall back to the identity provider, which validates real Twitch OAuth
