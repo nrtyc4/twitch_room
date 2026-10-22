@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"twitch_room/internal/performance"
+	"twitch_room/internal/validate"
 )
 
 var ErrInvalidIdentity = errors.New("invalid identity")
@@ -371,6 +372,18 @@ func (p *TwitchProvider) getUserIDFromToken(ctx context.Context, accessToken str
 
 	login := userResp.Data[0].Login
 	p.identityCacheMu.Lock()
+	// Bound the cache: drop expired entries, and if still too large, clear it.
+	if len(p.identityCache) >= 1024 {
+		now := time.Now()
+		for k, v := range p.identityCache {
+			if now.Sub(v.fetchedAt) >= ttl {
+				delete(p.identityCache, k)
+			}
+		}
+		if len(p.identityCache) >= 1024 {
+			p.identityCache = make(map[string]cachedIdentity)
+		}
+	}
 	p.identityCache[accessToken] = cachedIdentity{userID: login, fetchedAt: time.Now()}
 	p.identityCacheMu.Unlock()
 	return login, nil
@@ -441,6 +454,9 @@ func (p *TwitchProvider) ResolveUserID(ctx context.Context, r *http.Request) (st
 	if p.EnableDevAuth {
 		userID := strings.TrimSpace(r.Header.Get("X-User-ID"))
 		if userID != "" {
+			if err := validate.UserID(userID); err != nil {
+				return "", err
+			}
 			return userID, nil
 		}
 	}
