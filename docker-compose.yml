@@ -1,5 +1,6 @@
 services:
   db:
+    restart: unless-stopped
     image: postgres:16-alpine
     container_name: twitch-room-db
     environment:
@@ -17,6 +18,7 @@ services:
       retries: 10
 
   twitch-room:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile
@@ -44,6 +46,7 @@ services:
       start_period: 10s
 
   prometheus:
+    restart: unless-stopped
     build:
       context: ./deploy/prometheus
       dockerfile: Dockerfile
