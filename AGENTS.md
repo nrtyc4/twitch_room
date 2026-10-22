@@ -30,7 +30,7 @@ Storage: PostgreSQL when `DATABASE_DSN` is set, otherwise in-memory. OAuth sessi
 ## Conventions / gotchas
 
 - All Go sources must be `gofmt`-clean; CI fails otherwise.
-- No `.env` auto-loading — env vars must be in the process environment.
+- `.env` is auto-loaded by `secrets.LoadDotEnv(".env")` if present (existing env wins); production should set env vars directly.
 - `ALLOW_DEV_AUTH=true` with `APP_ENV=production` refuses to start.
 - CORS defaults to `chrome-extension://*,moz-extension://*` only in dev (dev auth on, non-production); production must set `ALLOWED_ORIGINS`.
 - Twitch enrichment is active only when `TWITCH_CLIENT_ID` + `TWITCH_CLIENT_SECRET` are set; then unknown channel IDs are rejected with 400, and a background job re-resolves metadata every `WATCH_REFRESH_SECONDS`. Without creds, plain IDs are stored as-is.
