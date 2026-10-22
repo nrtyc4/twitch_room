@@ -83,13 +83,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await chrome.storage.local.get(['API_BASE', 'AUTH_TOKEN', 'USER_ID']);
       const apiBase = (r.API_BASE || 'http://localhost:8080').replace(/\/$/, '');
       try {
-        const resp = await fetch(`${apiBase}/auth/logout`, {
-          method: 'POST',
+        const resp = await fetch(`${apiBase}/v1/account`, {
+          method: 'DELETE',
           headers: { 'Authorization': `Bearer ${r.AUTH_TOKEN || ''}`, 'X-User-ID': r.USER_ID || '' },
           credentials: 'include',
         });
-        if (resp.ok) showStatus('Data deleted.', true);
-        else showStatus('Delete failed: ' + resp.status, false);
+        if (resp.ok) showStatus('All data deleted.', true);
+        else { showStatus('Delete failed: ' + resp.status, false); return; }
       } catch (e) {
         showStatus('Delete error: ' + e.message, false);
       }
