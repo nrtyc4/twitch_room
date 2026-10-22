@@ -1,0 +1,25 @@
+# VCS
+.git
+.gitignore
+
+# Local env / secrets
+.env
+.env.*
+
+# Build outputs
+*.exe
+*.test
+bin/
+
+# Dependencies
+e2e/node_modules/
+node_modules/
+
+# Docs / misc not needed in image
+docs/
+deploy/
+goProjects/
+
+# Logs / temp
+*.log
+server.log
