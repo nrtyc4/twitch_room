@@ -212,6 +212,26 @@ func main() {
 		slog.Warn("ALLOW_DEV_AUTH is enabled without APP_ENV=production; the API will accept X-User-ID from any caller. Set APP_ENV=production (and disable dev auth) for real deployments")
 	}
 
+	// Production hardening checks: surface misconfigurations that are safe in
+	// development but dangerous or non-functional in a real deployment.
+	if cfg.AppEnv == "production" {
+		if cfg.DatabaseDSN == "" {
+			slog.Warn("APP_ENV=production but DATABASE_DSN is empty; falling back to in-memory storage and sessions, which is not suitable for multi-instance or durable deployments")
+		}
+		if len(cfg.AllowedOrigins) == 0 {
+			slog.Warn("APP_ENV=production but ALLOWED_ORIGINS is empty; cross-origin clients (e.g. the browser extension) will be blocked by CORS")
+		}
+		if cfg.AuthToken == "" {
+			slog.Warn("APP_ENV=production but TWITCH_ROOM_AUTH_TOKEN is empty; /metrics will be publicly readable")
+		}
+		if os.Getenv("OAUTH_STATE_SECRET") == "" && sec.AuthToken == "" {
+			slog.Warn("APP_ENV=production with multiple instances requires OAUTH_STATE_SECRET (or TWITCH_ROOM_AUTH_TOKEN) so OAuth state verification works across instances")
+		}
+		if !cfg.TLSEnabled && !cfg.SecureCookies {
+			slog.Warn("APP_ENV=production without TLS_ENABLED or COOKIE_SECURE; session cookies will not be marked Secure")
+		}
+	}
+
 	// Stop serving gracefully when the process receives an interrupt or a
 	// termination signal: cancel the background refresh loop and drain
 	// in-flight requests before exiting.
