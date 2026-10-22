@@ -43,7 +43,7 @@ Target: first production release of the backend service + browser extension.
 - [x] Version injection via ldflags (`APP_VERSION`)
 - [ ] Tag a release (`v1.0.0`) and build with `git describe`
 - [ ] Push image to registry (GHCR/Docker Hub) — not yet automated
-- [x] CI: Docker build step added (push to registry still manual)
+- [x] CI: Docker build step added; publish workflow on tags (GHCR)
 
 ## 2. Browser extension
 
