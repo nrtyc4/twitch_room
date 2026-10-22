@@ -43,6 +43,13 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
     docker-compose up --build
     ```
 
+    For a production build, layer the production override so the required
+    secrets and production-safe defaults are enforced:
+
+    ```bash
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+    ```
+
     To label the build in `/metrics` (and on the Grafana dashboard), pass the
     version through:
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-10-22
+
+### Added
+- **Ops:** `.dockerignore` to shrink the Docker build context; restart policies for compose services.
+- **Extension:** store-ready icons (16/32/48/128) and manifest icon entries.
+- **Docs:** production overlay usage in README.
+
+### Changed
+- **Backend:** production env misconfiguration warnings at startup; stricter identity validation and bounded token cache.
+- **Extension:** "Delete my data" now calls `DELETE /v1/account`; privacy policy reflects explicit deletion.
+- **Docs:** AGENTS.md for OpenCode sessions.
+
 ## [Unreleased] - 2026-10-21
 
 ### Changed
