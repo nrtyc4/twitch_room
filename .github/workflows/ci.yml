@@ -8,6 +8,21 @@ on:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: twitch_room
+          POSTGRES_PASSWORD: twitch_room
+          POSTGRES_DB: twitch_room
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U twitch_room -d twitch_room"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,7 +46,20 @@ jobs:
       - name: Test (race)
         run: go test -race ./...
 
+      - name: Test (Postgres)
+        env:
+          TEST_DATABASE_DSN: postgres://twitch_room:twitch_room@localhost:5432/twitch_room?sslmode=disable
+        run: go test ./internal/repository/ -run Postgres -v
+
       - name: Build with version
         env:
           VERSION: ${{ github.sha }}
         run: go build -ldflags "-X main.version=${VERSION}" -o /tmp/twitch-room .
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build --build-arg VERSION=${{ github.sha }} -t twitch-room:ci .

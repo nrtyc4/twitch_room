@@ -43,7 +43,7 @@ Target: first production release of the backend service + browser extension.
 - [x] Version injection via ldflags (`APP_VERSION`)
 - [ ] Tag a release (`v1.0.0`) and build with `git describe`
 - [ ] Push image to registry (GHCR/Docker Hub) — not yet automated
-- [ ] CI: add Docker build step (currently only Go build)
+- [x] CI: Docker build step added (push to registry still manual)
 
 ## 2. Browser extension
 
@@ -80,7 +80,7 @@ Target: first production release of the backend service + browser extension.
 - [x] E2E (Playwright, health + metrics)
 - [ ] E2E against authenticated flows (publish/feed/share)
 - [ ] Load test (rate limits, refresh loop)
-- [ ] Postgres-backed tests run in CI (needs service container)
+- [x] Postgres-backed tests run in CI (service container added)
 
 ## 5. Pre-launch verification
 - [ ] Deploy to staging with prod override
@@ -99,8 +99,11 @@ Target: first production release of the backend service + browser extension.
 - [ ] Monitor alerts + logs for 24h
 
 ## Recommended next actions (prioritized)
-1. Add Postgres service container to CI and run `-race` + Postgres tests.
-2. Add a Docker build/push step to CI.
+1. [x] Add Postgres service container to CI and run `-race` + Postgres tests.
+2. [x] Add a Docker build step to CI (push to registry still manual).
+3. Host privacy policy at a public URL and finalize store listing (see `docs/STORE_LISTING.md`).
+4. Register both redirect URIs in the Twitch app.
+5. Tag v1.0.0 and perform staging deploy + full verification.
 3. Host privacy policy and prepare store listing.
 4. Register both redirect URIs in the Twitch app.
 5. Tag v1.0.0 and perform staging deploy + full verification.
