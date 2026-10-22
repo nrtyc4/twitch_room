@@ -141,7 +141,7 @@ The `state` parameter is stored server-side at the start of the flow and verifie
 
 The service is a headless API: it no longer ships an embedded web UI. The primary client is the browser extension under `extension/`, which talks to the API directly. Any other client (script, mobile app, etc.) can use the same HTTP API described below.
 
-The extension authenticates with Twitch via `chrome.identity` (implicit grant). Register the redirect URI `https://<extension-id>.chromiumapp.org/` in the Twitch developer console, and provide the app's client id through the extension settings (or the `TWITCH_CLIENT_ID` constant in `extension/background.js`). Tokens are kept in `chrome.storage.local`.
+The extension authenticates with Twitch via `chrome.identity` (implicit grant). Register the redirect URI `https://<extension-id>.chromiumapp.org/` in the Twitch developer console. The extension discovers the Twitch client id automatically from the backend (`GET /auth/twitch/client-id`), so end users do not need to enter it; a manual override is still available in the extension settings. Tokens are kept in `chrome.storage.local`.
 
 The API authenticates with the `X-User-ID` header (dev auth) or automatically via the session cookie issued after a real Twitch login. In real deployments the session cookie path should be preferred over trusting client-supplied user ids.
 
