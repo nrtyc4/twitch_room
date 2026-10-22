@@ -371,6 +371,13 @@ func main() {
 		}
 	}
 
+	// Guard against open-redirect via a configured post-login URL: only
+	// relative paths are allowed.
+	redirectAfterLogin := cfg.RedirectAfterLogin
+	if redirectAfterLogin == "" || !strings.HasPrefix(redirectAfterLogin, "/") || strings.HasPrefix(redirectAfterLogin, "//") {
+		redirectAfterLogin = "/"
+	}
+
 	s := &server{
 		oauthStateSecret:   oauthStateSecret,
 		watchService:       svc,
@@ -385,7 +392,7 @@ func main() {
 		watchStateCache:    watchStateCache,
 		oauthStates:        newOAuthStateStore(15 * time.Minute),
 		sessions:           sessions,
-		redirectAfterLogin: cfg.RedirectAfterLogin,
+		redirectAfterLogin: redirectAfterLogin,
 		trustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
 		metrics:            metrics.New(),
 	}
