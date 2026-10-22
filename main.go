@@ -153,6 +153,7 @@ func newRouter(s *server) (*http.ServeMux, error) {
 	mux.HandleFunc("/auth/twitch/callback", s.handleTwitchCallback)
 	mux.HandleFunc("/auth/me", s.handleMe)
 	mux.HandleFunc("/auth/logout", s.handleLogout)
+	mux.HandleFunc("/auth/twitch/client-id", s.handleTwitchClientID)
 	mux.HandleFunc("/u/", s.handleSharePage)
 	mux.Handle("/extension/", http.FileServer(http.FS(sharePageFS)))
 
@@ -1002,6 +1003,22 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		sep = "&"
 	}
 	http.Redirect(w, r, redirect+sep+"user_id="+url.QueryEscape(userID), http.StatusFound)
+}
+
+// handleTwitchClientID exposes the configured Twitch client id so clients
+// (such as the browser extension) can authenticate without shipping their own
+// credentials. The client id is public by design.
+func (s *server) handleTwitchClientID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	clientID := ""
+	if tp, ok := s.identityProvider.(*identity.TwitchProvider); ok && tp != nil {
+		clientID = tp.ClientID
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"client_id": clientID})
 }
 
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {

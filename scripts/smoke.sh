@@ -33,6 +33,7 @@ ABOB=(-H "Authorization: Bearer $TOKEN" -H "X-User-ID: bob")
 
 echo "--- smoke ---"
 check "health" "$BASE/health"
+check "twitch client id" "$BASE/auth/twitch/client-id"
 check "metrics (authed)" -H "Authorization: Bearer $TOKEN" "$BASE/metrics"
 check "publish alice" -X POST "$BASE/v1/watch" -H "Content-Type: application/json" "${AUTH[@]}" -d '{"stream_ids":["shroud"]}'
 check "read alice" "$BASE/v1/users/alice/watch" "${AUTH[@]}"

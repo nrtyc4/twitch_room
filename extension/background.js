@@ -93,7 +93,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function getClientId() {
   const stored = await chrome.storage.local.get(['TWITCH_CLIENT_ID']);
   if (stored.TWITCH_CLIENT_ID) return stored.TWITCH_CLIENT_ID;
-  return TWITCH_CLIENT_ID;
+  if (TWITCH_CLIENT_ID) return TWITCH_CLIENT_ID;
+  // Fall back to the backend's configured (public) client id so users never
+  // have to enter one themselves.
+  try {
+    const s = await chrome.storage.local.get(['API_BASE']);
+    const apiBase = (s.API_BASE || API_BASE || 'http://localhost:8080').replace(/\/$/, '');
+    const res = await fetch(`${apiBase}/auth/twitch/client-id`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.client_id) {
+        await chrome.storage.local.set({ TWITCH_CLIENT_ID: data.client_id });
+        return data.client_id;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return '';
 }
 
 /**

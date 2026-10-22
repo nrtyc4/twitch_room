@@ -38,6 +38,7 @@ $bob = @("-H", "Authorization: Bearer $Token", "-H", "X-User-ID: bob")
 
 Write-Host "--- smoke ---"
 Invoke-Check "health" @("$Base/health")
+Invoke-Check "twitch client id" @("$Base/auth/twitch/client-id")
 Invoke-Check "metrics (authed)" @("-H", "Authorization: Bearer $Token", "$Base/metrics")
 $jsonPublish = '{"stream_ids":["shroud"]}'
 $jsonPublish | Set-Content -NoNewline -Path "$env:TEMP\smoke-publish.json"

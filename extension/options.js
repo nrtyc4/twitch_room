@@ -28,10 +28,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  chrome.storage.local.get(['TWITCH_CLIENT_ID', 'API_BASE'], (r) => {
-    if (r.TWITCH_CLIENT_ID) clientIdInput.value = r.TWITCH_CLIENT_ID;
+  chrome.storage.local.get(['TWITCH_CLIENT_ID', 'API_BASE'], async (r) => {
     if (r.API_BASE) apiBaseInput.value = r.API_BASE;
     else apiBaseInput.value = 'http://localhost:8080';
+    if (r.TWITCH_CLIENT_ID) {
+      clientIdInput.value = r.TWITCH_CLIENT_ID;
+    } else {
+      // Try to auto-discover the client id from the backend.
+      try {
+        const base = (r.API_BASE || 'http://localhost:8080').replace(/\/$/, '');
+        const res = await fetch(`${base}/auth/twitch/client-id`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.client_id) clientIdInput.value = data.client_id;
+        }
+      } catch (e) { /* ignore */ }
+    }
     refreshAuthStatus();
   });
 
