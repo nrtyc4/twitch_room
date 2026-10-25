@@ -1,6 +1,6 @@
 # AGENTS.md — Twitch Room
 
-Go service (`module twitch_room`, Go 1.26) exposing a headless HTTP API for publishing Twitch watch state + subscriptions. Primary client is the browser extension in `extension/` (no build step; load unpacked).
+Go service (`module twitch_room`, Go 1.27) exposing a headless HTTP API for publishing Twitch watch state + subscriptions. Primary client is the browser extension in `extension/` (no build step; load unpacked).
 
 ## Commands
 

@@ -37,8 +37,21 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+	// Retry the initial ping with backoff so transient DB startup delays
+	// (common in compose where the service starts before Postgres is ready)
+	// do not crash the service.
+	var pingErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		pingErr = db.Ping()
+		if pingErr == nil {
+			break
+		}
+		slog.Warn("postgres ping failed, retrying", "attempt", attempt, "error", pingErr)
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	if pingErr != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", pingErr)
 	}
 
 	ps := &PostgresStore{db: db}
@@ -440,7 +453,7 @@ func (ps *PostgresStore) DeleteSubscription(subscriberID, publisherID string) er
 	return nil
 }
 
-func (ps *PostgresStore) querySubscriptions(query string, args ...interface{}) []service.Subscription {
+func (ps *PostgresStore) querySubscriptions(query string, args ...any) []service.Subscription {
 	rows, err := ps.db.Query(query, args...)
 	if err != nil {
 		slog.Warn("postgres querySubscriptions failed", "error", err)

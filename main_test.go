@@ -29,7 +29,7 @@ func TestAuthLoginRateLimitedByIP(t *testing.T) {
 	defer testServer.Close()
 
 	statuses := make([]int, 0, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		resp, err := http.Get(testServer.URL + "/auth/twitch?state=abc")
 		if err != nil {
 			t.Fatalf("request %d failed: %v", i+1, err)

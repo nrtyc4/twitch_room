@@ -2,7 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-10-22
+## [Unreleased]
+
+## [1.0.0] - 2026-10-25
 
 ### Added
 - **Ops:** `.dockerignore` to shrink the Docker build context; restart policies for compose services.
@@ -22,7 +24,7 @@ All notable changes to this project will be documented in this file.
 - **Logout:** no longer purges account data; explicit delete endpoint added.
 - **Refresh:** Helix lookups chunked at 100; refresh pages states in batches.
 - **Extension:** feed rendered without `innerHTML`; clearer expired-session errors.
-- **Ops:** Docker image runs as non-root with healthcheck; toolchain aligned to Go 1.26.
+- **Ops:** Docker image runs as non-root with healthcheck; toolchain aligned to Go 1.27.
 
 ## [Unreleased] - 2026-10-19
 

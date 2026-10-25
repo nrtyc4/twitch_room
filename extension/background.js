@@ -12,6 +12,13 @@ chrome.storage.local.get(['API_BASE'], (r) => {
 // or set it via the extension options page (stored as TWITCH_CLIENT_ID).
 const TWITCH_CLIENT_ID = '';
 
+// Base64url-encode raw bytes (no padding) for PKCE.
+function base64UrlEncode(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
 // State in memory for fast access
 let currentWatchState = {
   channelName: null,
@@ -112,8 +119,8 @@ async function getClientId() {
 }
 
 /**
- * Runs the Twitch OAuth (implicit grant) flow via chrome.identity and stores
- * the resulting access token + user id in extension storage.
+ * Runs the Twitch OAuth (authorization code + PKCE) flow via chrome.identity
+ * and stores the resulting access token + user id in extension storage.
  */
 async function loginWithTwitch() {
   const clientId = await getClientId();
@@ -122,10 +129,19 @@ async function loginWithTwitch() {
   }
 
   const redirectUri = chrome.identity.getRedirectURL();
+
+  // PKCE: generate a code verifier + S256 challenge so the authorization
+  // code cannot be intercepted/replayed (recommended for public clients).
+  const codeVerifier = base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));
+  const challengeBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier));
+  const codeChallenge = base64UrlEncode(new Uint8Array(challengeBuf));
+
   const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('response_type', 'token');
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
   // Minimal scopes: identity only. No follows/data scopes are used.
   authUrl.searchParams.set('force_verify', 'true');
 
@@ -146,10 +162,30 @@ async function loginWithTwitch() {
     );
   });
 
-  // The access token comes back in the URL fragment.
-  const hash = responseUrl.split('#')[1] || '';
-  const params = new URLSearchParams(hash);
-  const accessToken = params.get('access_token');
+  // The authorization code comes back in the query string.
+  const url = new URL(responseUrl);
+  const code = url.searchParams.get('code');
+  if (!code) {
+    throw new Error('No authorization code returned by Twitch.');
+  }
+
+  // Exchange the code for an access token using PKCE (no client secret needed).
+  const tokenResp = await fetch('https://id.twitch.tv/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      code: code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    }).toString(),
+  });
+  if (!tokenResp.ok) {
+    throw new Error(`Token exchange failed: ${tokenResp.status}`);
+  }
+  const tokenData = await tokenResp.json();
+  const accessToken = tokenData.access_token;
   if (!accessToken) {
     throw new Error('No access token returned by Twitch.');
   }

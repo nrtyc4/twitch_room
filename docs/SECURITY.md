@@ -24,3 +24,13 @@ Implemented the `DeleteUser` functionality to allow for complete purging of user
 
 #### 4. Rate Limiting
 The `RateLimiter` now includes periodic cleanup of stale entries to prevent memory exhaustion attacks.
+
+#### 5. OAuth state secret rotation
+`OAUTH_STATE_SECRET` (or `TWITCH_ROOM_AUTH_TOKEN` as a fallback) signs the short-lived OAuth state
+cookie used by `/auth/twitch`. To rotate without breaking in-flight logins:
+
+1. Generate a new secret: `openssl rand -hex 32`.
+2. Deploy it as `OAUTH_STATE_SECRET` on **all** instances at once (the value must be shared across instances).
+3. In-flight logins issued under the old secret fail verification and the user simply retries; no data is lost.
+4. For a zero-downtime rotation, accept both old and new secrets for one TTL window (900s) by keeping the previous value in `OAUTH_STATE_SECRET_PREVIOUS` (not yet implemented — track as future work) before removing it.
+5. Never log or commit the secret; it is read from the environment only.

@@ -155,10 +155,7 @@ func (s *MemoryStore) List(limit, offset int) []service.UserWatchState {
 		return []service.UserWatchState{}
 	}
 
-	end := start + limit
-	if end > len(allStates) {
-		end = len(allStates)
-	}
+	end := min(start+limit, len(allStates))
 
 	return allStates[start:end]
 }

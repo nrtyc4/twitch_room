@@ -201,7 +201,7 @@ func labelParts(sig string) string {
 	b.WriteByte('{')
 	first := true
 	// sig is encoded as k=v;k=v with no literal ';' or '=' in values.
-	for _, pair := range strings.Split(sig, ";") {
+	for pair := range strings.SplitSeq(sig, ";") {
 		if !first {
 			b.WriteByte(',')
 		}

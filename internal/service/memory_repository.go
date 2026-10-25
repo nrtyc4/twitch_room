@@ -104,10 +104,7 @@ func (r *MemoryRepository) ListActiveUsers(limit, offset int) []UserWatchState {
 		return []UserWatchState{}
 	}
 
-	end := start + limit
-	if end > len(states) {
-		end = len(states)
-	}
+	end := min(start+limit, len(states))
 
 	return states[start:end]
 }

@@ -63,6 +63,21 @@ services:
     depends_on:
       - twitch-room
 
+  alertmanager:
+    restart: unless-stopped
+    build:
+      context: ./deploy/alertmanager
+      dockerfile: Dockerfile
+    image: twitch-room-alertmanager:local
+    container_name: twitch-room-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - alertmanagerdata:/alertmanager
+    depends_on:
+      - prometheus
+
 volumes:
   pgdata:
   promdata:
+  alertmanagerdata:

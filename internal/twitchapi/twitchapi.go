@@ -74,10 +74,7 @@ func (c *Client) LookupStreams(ctx context.Context, logins []string) (map[string
 
 	// Helix caps filter parameters at 100 per request, so chunk the lookups.
 	for i := 0; i < len(unique); i += usersChunkSize {
-		end := i + usersChunkSize
-		if end > len(unique) {
-			end = len(unique)
-		}
+		end := min(i+usersChunkSize, len(unique))
 		chunk := unique[i:end]
 		users, err := c.fetchUsers(ctx, chunk)
 		if err != nil {
@@ -96,10 +93,7 @@ func (c *Client) LookupStreams(ctx context.Context, logins []string) (map[string
 	// only rather than failing the whole publish.
 	liveByLogin := map[string]helixStream{}
 	for i := 0; i < len(unique); i += usersChunkSize {
-		end := i + usersChunkSize
-		if end > len(unique) {
-			end = len(unique)
-		}
+		end := min(i+usersChunkSize, len(unique))
 		chunk := unique[i:end]
 		if streams, err := c.fetchStreams(ctx, chunk); err == nil {
 			for _, st := range streams {
@@ -416,10 +410,7 @@ func (c *Client) ResolveUsers(ctx context.Context, userIDs []string) (map[string
 	}
 
 	for i := 0; i < len(missing); i += usersChunkSize {
-		end := i + usersChunkSize
-		if end > len(missing) {
-			end = len(missing)
-		}
+		end := min(i+usersChunkSize, len(missing))
 		users, err := c.fetchUsers(ctx, missing[i:end])
 		if err != nil {
 			return out, err

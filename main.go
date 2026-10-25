@@ -203,7 +203,13 @@ func main() {
 		level = slog.LevelInfo
 	}
 	opts := &slog.HandlerOptions{Level: level}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
+	var logHandler slog.Handler
+	if strings.EqualFold(cfg.LogFormat, "json") {
+		logHandler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		logHandler = slog.NewTextHandler(os.Stdout, opts)
+	}
+	slog.SetDefault(slog.New(logHandler))
 
 	if cfg.AllowDevAuth && cfg.AppEnv == "production" {
 		slog.Error("refusing to start: ALLOW_DEV_AUTH is enabled while APP_ENV=production; unauthenticated callers could impersonate any user")
@@ -526,8 +532,7 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // global size limit are answered with 413; malformed JSON gets a 400.
 func (s *server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
 			return false
 		}

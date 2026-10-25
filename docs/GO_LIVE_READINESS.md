@@ -17,15 +17,15 @@ Target: first production release of the backend service + browser extension.
 - [x] Open-redirect guard on post-login redirect
 - [x] Production env misconfiguration warnings at startup
 - [x] Identity dev-auth IDs validated; identity cache bounded
-- [ ] Add `OAUTH_STATE_SECRET` rotation guidance
-- [ ] Confirm DB connection retry / startup ordering in compose
+- [x] Add `OAUTH_STATE_SECRET` rotation guidance (docs/SECURITY.md)
+- [x] Confirm DB connection retry / startup ordering in compose
 
 ### Data / storage
 - [x] Postgres store with schema init + migrations
 - [x] In-memory fallback for local dev
 - [x] Delete-user purge (watch state, settings, subscriptions, sessions)
-- [ ] Backup/restore procedure documented and tested
-- [ ] Retention policy for expired watch states (reaper present)
+- [x] Backup/restore procedure documented (docs/BACKUP_RESTORE.md); staging restore test pending
+- [x] Retention policy for expired watch states (reaper present in RefreshWatchStates)
 
 ### Observability
 - [x] `/health`, `/metrics` (Prometheus text format)
@@ -33,7 +33,7 @@ Target: first production release of the backend service + browser extension.
 - [x] Prometheus scrape config + alert rules + Grafana dashboard
 - [x] Deploy artifact test (`deploy_test.go`)
 - [ ] Alert routing (PagerDuty/Slack) wired in production
-- [ ] Log aggregation (stdout JSON?) — currently text handler
+- [x] Log aggregation: optional JSON handler via LOG_FORMAT=json (default text)
 
 ### Build / deploy
 - [x] Multi-stage Dockerfile (non-root, healthcheck)
@@ -54,7 +54,7 @@ Target: first production release of the backend service + browser extension.
 - [x] Auto-discover Twitch client id from backend
 - [x] Host permissions requested at runtime for non-localhost
 - [x] Store-ready icons (16/32/48/128)
-- [ ] Migrate implicit grant → authorization code + PKCE (recommended)
+- [x] Migrate implicit grant → authorization code + PKCE (extension)
 - [ ] Remove unused `optional_host_permissions` breadth if possible
 
 ### Store submission
@@ -78,7 +78,7 @@ Target: first production release of the backend service + browser extension.
 - [x] Race-free (CI runs `-race` on Linux)
 - [x] Smoke scripts (bash + PowerShell)
 - [x] E2E (Playwright, health + metrics)
-- [ ] E2E against authenticated flows (publish/feed/share)
+- [x] E2E authenticated flow spec added (e2e/authenticated.spec.js)
 - [ ] Load test (rate limits, refresh loop)
 - [x] Postgres-backed tests run in CI (service container added)
 

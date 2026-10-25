@@ -26,7 +26,7 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 	mockTwitchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth2/token" && r.Method == http.MethodPost {
 			// Return mock token response
-			resp := map[string]interface{}{
+			resp := map[string]any{
 				"access_token": "mock-access-token-12345",
 				"token_type":   "bearer",
 				"expires_in":   3600,
@@ -37,8 +37,8 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 		}
 		if r.URL.Path == "/helix/users" && r.Method == http.MethodGet {
 			// Return mock user info
-			resp := map[string]interface{}{
-				"data": []map[string]interface{}{
+			resp := map[string]any{
+				"data": []map[string]any{
 					{
 						"id":    "123456789",
 						"login": "test-twitch-user",
@@ -114,7 +114,7 @@ func TestIntegrationOAuthFlowWithMockedTwitchAPI(t *testing.T) {
 		t.Fatalf("expected 200 for feed, got %d", resp2.StatusCode)
 	}
 
-	var feedResp []map[string]interface{}
+	var feedResp []map[string]any
 	json.NewDecoder(resp2.Body).Decode(&feedResp)
 
 	if len(feedResp) != 1 {
@@ -178,7 +178,7 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 	reqFeed.Header.Set("X-User-ID", "user1")
 	respFeed, _ := http.DefaultClient.Do(reqFeed)
 
-	var feedResp []map[string]interface{}
+	var feedResp []map[string]any
 	json.NewDecoder(respFeed.Body).Decode(&feedResp)
 
 	if len(feedResp) != 1 || feedResp[0]["user_id"] != "user2" {
@@ -194,7 +194,7 @@ func TestIntegrationWatchStateWithMemoryStore(t *testing.T) {
 		t.Fatalf("expected 200 reading own watch state, got %d", respOwn.StatusCode)
 	}
 
-	var ownState map[string]interface{}
+	var ownState map[string]any
 	json.NewDecoder(respOwn.Body).Decode(&ownState)
 
 	if ownState["user_id"] != "user1" {
@@ -246,7 +246,7 @@ func TestIntegrationRateLimitingEnforcement(t *testing.T) {
 	limitedCount := 0
 
 	// Make 5 requests; expect first 3 to succeed, next 2 to be rate limited
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		req, _ := http.NewRequest("POST", testServer.URL+"/v1/watch", bytes.NewReader([]byte(`{"stream_ids":["test"]}`)))
 		req.Header.Set("X-User-ID", userID)
 		req.Header.Set("Content-Type", "application/json")
@@ -369,15 +369,15 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	}
 
 	respBody, _ := io.ReadAll(resp.Body)
-	var setResp map[string]interface{}
+	var setResp map[string]any
 	json.Unmarshal(respBody, &setResp)
 
 	if setResp["user_id"] != userID {
 		t.Fatalf("expected user_id %s, got %v", userID, setResp["user_id"])
 	}
 
-	if len(setResp["stream_ids"].([]interface{})) != 3 {
-		t.Fatalf("expected 3 streams, got %v", len(setResp["stream_ids"].([]interface{})))
+	if len(setResp["stream_ids"].([]any)) != 3 {
+		t.Fatalf("expected 3 streams, got %v", len(setResp["stream_ids"].([]any)))
 	}
 
 	// Step 2: Publisher sets watch state
@@ -412,7 +412,7 @@ func TestIntegrationFullRequestCycle(t *testing.T) {
 	}
 
 	feedRespBody, _ := io.ReadAll(respFeed.Body)
-	var feedResp []map[string]interface{}
+	var feedResp []map[string]any
 	json.Unmarshal(feedRespBody, &feedResp)
 
 	if len(feedResp) != 1 || feedResp[0]["user_id"] != publisherID {
@@ -481,7 +481,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	if resp, body := do("GET", "/v1/settings", "publisher", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("get settings failed: %d", resp.StatusCode)
 	} else {
-		var settings map[string]interface{}
+		var settings map[string]any
 		json.Unmarshal(body, &settings)
 		if settings["subscription_mode"] != "approved" || settings["visibility"] != "subscribers" {
 			t.Fatalf("unexpected settings: %s", body)
@@ -497,7 +497,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("feed failed: %d", resp.StatusCode)
 	} else {
-		var feed []map[string]interface{}
+		var feed []map[string]any
 		json.Unmarshal(body, &feed)
 		if len(feed) != 0 {
 			t.Fatalf("expected empty feed while pending, got %v", feed)
@@ -508,7 +508,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	if resp, body := do("GET", "/v1/subscription_requests", "publisher", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("list requests failed: %d", resp.StatusCode)
 	} else {
-		var requests []map[string]interface{}
+		var requests []map[string]any
 		json.Unmarshal(body, &requests)
 		if len(requests) != 1 || requests[0]["subscriber_id"] != "viewer" {
 			t.Fatalf("unexpected requests: %s", body)
@@ -522,7 +522,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("feed failed: %d", resp.StatusCode)
 	} else {
-		var feed []map[string]interface{}
+		var feed []map[string]any
 		json.Unmarshal(body, &feed)
 		if len(feed) != 1 || feed[0]["user_id"] != "publisher" {
 			t.Fatalf("expected publisher in feed after approval, got %v", feed)
@@ -541,7 +541,7 @@ func TestIntegrationSubscriptionModes(t *testing.T) {
 	if resp, body := do("GET", "/v1/feed", "viewer", ""); resp.StatusCode != http.StatusOK {
 		t.Fatalf("feed failed: %d", resp.StatusCode)
 	} else {
-		var feed []map[string]interface{}
+		var feed []map[string]any
 		json.Unmarshal(body, &feed)
 		if len(feed) != 0 {
 			t.Fatalf("expected empty feed after unsubscribe, got %v", feed)
@@ -640,7 +640,7 @@ func TestIntegrationExtensionFlow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/auth/me: got %d", resp.StatusCode)
 	}
-	var me map[string]interface{}
+	var me map[string]any
 	json.NewDecoder(resp.Body).Decode(&me)
 	resp.Body.Close()
 	if me["user_id"] != userID {
@@ -795,7 +795,7 @@ func TestIntegrationTwitchLoginCallbackFlow(t *testing.T) {
 	}
 	meBody, _ := io.ReadAll(meResp.Body)
 	meResp.Body.Close()
-	var me map[string]interface{}
+	var me map[string]any
 	json.Unmarshal(meBody, &me)
 	if me["user_id"] != "twitch-login-user" {
 		t.Fatalf("expected session user twitch-login-user, got %v", me["user_id"])

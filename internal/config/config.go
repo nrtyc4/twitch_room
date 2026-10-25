@@ -16,6 +16,7 @@ type Config struct {
 	DatabaseDSN         string
 	RedirectAfterLogin  string
 	LogLevel            string
+	LogFormat           string
 
 	// AppEnv is "production" or ""/"development". It gates warnings about
 	// development-only settings.
@@ -89,6 +90,11 @@ func Load() Config {
 		logLevel = "info"
 	}
 
+	logFormat := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_FORMAT")))
+	if logFormat == "" {
+		logFormat = "text"
+	}
+
 	tlsEnabled := boolEnv("TLS_ENABLED")
 	secureCookies := boolEnv("COOKIE_SECURE")
 
@@ -111,6 +117,7 @@ func Load() Config {
 		RedirectAfterLogin:  redirectAfterLogin,
 		AppEnv:              appEnv,
 		LogLevel:            logLevel,
+		LogFormat:           logFormat,
 		TLSEnabled:          tlsEnabled,
 		TLSCertFile:         os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:          os.Getenv("TLS_KEY_FILE"),

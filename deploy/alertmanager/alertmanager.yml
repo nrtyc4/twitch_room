@@ -1,0 +1,26 @@
+# Alertmanager configuration for Twitch Room.
+# Wire real receivers (Slack/PagerDuty/email) below before production use.
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+
+receivers:
+  - name: 'default'
+    # Placeholder: log to stdout via webhook to a no-op endpoint.
+    # Replace with slack_configs / pagerduty_configs / email_configs.
+    webhook_configs:
+      - url: 'http://localhost:9099/'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname']

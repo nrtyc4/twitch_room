@@ -32,8 +32,8 @@ var histogramSeriesSuffixes = []string{"_bucket", "_sum", "_count"}
 
 func baseMetricFamily(name string) string {
 	for _, suffix := range histogramSeriesSuffixes {
-		if strings.HasSuffix(name, suffix) {
-			return strings.TrimSuffix(name, suffix)
+		if before, ok := strings.CutSuffix(name, suffix); ok {
+			return before
 		}
 	}
 	return name

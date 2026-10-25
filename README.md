@@ -87,6 +87,7 @@ For deployment, we use `docker-compose` to manage the service and its dependenci
 | `ALLOWED_ORIGINS` | Comma-separated list of CORS origins (supports `*` wildcards, e.g. `chrome-extension://*,moz-extension://*`) | (empty) | No | Empty disables CORS; in dev (dev auth, non-production) it defaults to the extension origins. |
 | `APP_ENV` | `production` or empty | (empty) | No | |
 | `LOG_LEVEL` | Logging verbosity | `info` | No | |
+| `LOG_FORMAT` | Log output format (`text` or `json`) | `text` | No | |
 | `APP_VERSION` | Build version reported by `/metrics` | `dev` | No | Interpolated by Docker Compose into the image build (`-ldflags "-X main.version=..."`). |
 
 ## Authentication
