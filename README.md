@@ -11,6 +11,10 @@ The service is intentionally split into a few layers:
 - HTTP layer in `main.go`
 - Security boundary enforced by authenticated user identity and ownership checks
 
+For a deeper walkthrough (layers, request flow, storage, auth, middleware order,
+background jobs, caching, metrics, limitations) see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Security model
 
 This is the production-safe approach the service aims to use:
