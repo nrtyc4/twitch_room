@@ -43,6 +43,13 @@ Storage: PostgreSQL when `DATABASE_DSN` is set, otherwise in-memory. OAuth sessi
 - Postgres tests write rows but clean up; point at a throwaway DB.
 - Extension has no build step; edit files directly.
 
+## Spec-driven flow
+
+- `SPEC.md` at the project root is the source of truth for scope and acceptance criteria.
+- Before changing code, read `SPEC.md` and map the change to a section. Amend the spec first when scope changes.
+- Update `SPEC.md` status/plan checkboxes as work completes.
+- Run `/spec <intent>` to draft/refresh and `/spec-review` to audit.
+
 ## Agent tool-use protocols
 
 See `.agent-rules.md` (referenced by `.opencode/opencode.json` `instructions`).

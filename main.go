@@ -58,6 +58,7 @@ type server struct {
 	sessions           *sessionStore
 	redirectAfterLogin string
 	trustedProxyCIDRs  []netip.Prefix
+	allowedUsers       []string
 	shareLimiter       *security.RateLimiter
 	settingsLimiter    *security.RateLimiter
 	metrics            *metrics.Registry
@@ -401,6 +402,7 @@ func main() {
 		sessions:           sessions,
 		redirectAfterLogin: redirectAfterLogin,
 		trustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
+		allowedUsers:       cfg.AllowedUsers,
 		metrics:            metrics.New(),
 	}
 
@@ -984,6 +986,10 @@ func (s *server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication failed"})
 		return
 	}
+	if !s.userAllowed(userID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "user not allowed"})
+		return
+	}
 
 	// Issue a session cookie so the browser can authenticate API calls without
 	// holding the raw Twitch token. The user access token (empty for dev auth
@@ -1162,6 +1168,9 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 		if err := validate.UserID(userID); err != nil {
 			return "", false
 		}
+		if !s.userAllowed(userID) {
+			return "", false
+		}
 		return userID, true
 	}
 
@@ -1171,12 +1180,18 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 			if err := validate.UserID(userID); err != nil {
 				return "", false
 			}
+			if !s.userAllowed(userID) {
+				return "", false
+			}
 			return userID, true
 		}
 	}
 
 	userID, err := s.authMiddleware.UserID(r)
 	if err == nil {
+		if !s.userAllowed(userID) {
+			return "", false
+		}
 		return userID, true
 	}
 
@@ -1197,10 +1212,28 @@ func (s *server) requireUser(r *http.Request) (string, bool) {
 		if err := validate.UserID(userID); err != nil {
 			return "", false
 		}
+		if !s.userAllowed(userID) {
+			return "", false
+		}
 		return userID, true
 	}
 
 	return "", false
+}
+
+// userAllowed reports whether userID is permitted to use the service when an
+// ALLOWED_USERS allowlist is configured. An empty allowlist permits everyone.
+func (s *server) userAllowed(userID string) bool {
+	if len(s.allowedUsers) == 0 {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(userID))
+	for _, u := range s.allowedUsers {
+		if strings.ToLower(strings.TrimSpace(u)) == lower {
+			return true
+		}
+	}
+	return false
 }
 
 // handleMetrics renders Prometheus text metrics for scrapers. Aggregate

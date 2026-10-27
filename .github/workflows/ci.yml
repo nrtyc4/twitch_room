@@ -32,6 +32,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Spec check
+        run: |
+          if [ ! -s SPEC.md ]; then
+            echo "SPEC.md is missing or empty"
+            exit 1
+          fi
+
       - name: Format check
         run: |
           if [ -n "$(gofmt -l .)" ]; then

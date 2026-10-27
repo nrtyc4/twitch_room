@@ -11,6 +11,7 @@ import (
 
 	"twitch_room/internal/auth"
 	"twitch_room/internal/metrics"
+	"twitch_room/internal/performance"
 	"twitch_room/internal/security"
 	"twitch_room/internal/service"
 )
@@ -180,6 +181,74 @@ func TestRequireUserStaticTokenRejectsHeaderOnly(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 with static token configured, got %d", resp.StatusCode)
+	}
+}
+
+func TestAllowListRejectsDisallowedUser(t *testing.T) {
+	s := &server{
+		watchService:    service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
+		authMiddleware:  &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:     security.NewRateLimiter(30, time.Minute),
+		watchStateCache: performance.NewWatchStateCache(time.Minute),
+		allowedUsers:    []string{"allowed-user"},
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	post := func(userID string) *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, testServer.URL+"/v1/watch", bytes.NewBufferString(`{"stream_ids":["xqc"]}`))
+		req.Header.Set(auth.HeaderUserID, userID)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		return resp
+	}
+
+	// A disallowed user is rejected at the auth boundary before the watch
+	// service is consulted.
+	resp := post("disallowed-user")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for disallowed user, got %d", resp.StatusCode)
+	}
+
+	// An allowed user passes the auth boundary and the write succeeds.
+	resp = post("allowed-user")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200/201 for allowed user, got %d", resp.StatusCode)
+	}
+}
+
+func TestAllowListEmptyPermitsEveryone(t *testing.T) {
+	s := &server{
+		watchService:    service.NewService(service.NewMemoryRepository(), time.Minute, service.RealClock{}),
+		authMiddleware:  &auth.Middleware{AllowDevAuth: true},
+		rateLimiter:     security.NewRateLimiter(30, time.Minute),
+		watchStateCache: performance.NewWatchStateCache(time.Minute),
+		// allowedUsers left empty → permits everyone.
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/watch", s.handleWatch)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, testServer.URL+"/v1/watch", bytes.NewBufferString(`{"stream_ids":["xqc"]}`))
+	req.Header.Set(auth.HeaderUserID, "any-user")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200/201 when allowlist is empty, got %d", resp.StatusCode)
 	}
 }
 

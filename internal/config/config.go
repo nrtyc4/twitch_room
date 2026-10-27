@@ -50,6 +50,11 @@ type Config struct {
 	// X-Forwarded-Proto headers the service honours. Empty trusts nobody,
 	// so forwarded headers are ignored.
 	TrustedProxyCIDRs []netip.Prefix
+
+	// AllowedUsers is an optional allowlist of Twitch user logins permitted to
+	// use the service. Empty allows everyone (default). When set, any request
+	// authenticated as a user not in the list is rejected with 401.
+	AllowedUsers []string
 }
 
 func Load() Config {
@@ -126,6 +131,7 @@ func Load() Config {
 		AllowedHosts:        splitList(os.Getenv("ALLOWED_HOSTS")),
 		AllowedOrigins:      allowedOrigins,
 		TrustedProxyCIDRs:   parseCIDRs(os.Getenv("TRUSTED_PROXY_CIDRS")),
+		AllowedUsers:        splitList(os.Getenv("ALLOWED_USERS")),
 	}
 }
 

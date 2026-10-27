@@ -1,6 +1,18 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    ".agent-rules.md"
-  ]
+    ".agent-rules.md",
+    "AGENTS.md",
+    "SPEC.md"
+  ],
+  "commands": {
+    "spec": {
+      "description": "Draft or refresh SPEC.md",
+      "template": "Draft or refresh SPEC.md for: $ARGUMENTS. Follow the spec-driven skill. Do not write implementation code."
+    },
+    "spec-review": {
+      "description": "Audit code against SPEC.md",
+      "template": "Audit the repository against SPEC.md and report gaps. Do not edit code."
+    }
+  }
 }
